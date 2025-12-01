@@ -235,6 +235,9 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
     5. Attach device object to request
     
     BYPASS: Superusers (staff) are never blocked and always trusted
+    
+    NOTE: This middleware does NOT block - it only tracks devices.
+    Blocking is handled in the login view after all records are created.
     """
     
     def process_request(self, request):
@@ -256,6 +259,7 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
                 })()
                 request.device_fingerprint = 'superuser'
                 return None
+            
             # Calculate fingerprint
             fingerprint_hash = calculate_device_fingerprint(request)
             request.device_fingerprint = fingerprint_hash
@@ -318,54 +322,16 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
                     }
                 )
             else:
-                print(f"✓ EXISTING DEVICE: User={request.user.username}, Device={device.id}, Risk={device_risk_score}, Trusted={device.is_trusted}")
+                print(f"✓ EXISTING DEVICE: User={request.user.username}, Device={device.id}, Risk={device_risk_score}, Trusted={device.is_trusted}, Blocked={device.is_blocked}")
             
-            # CRITICAL: Check if device is blocked - BLOCK LOGIN
-            if device.is_blocked:
-                print(f"🚫 LOGIN BLOCKED: Device {device.id} is blocked for user {request.user.username}, Risk Score={device_risk_score}")
-                
-                # Log the blocked attempt
-                from .models import SystemLog
-                from .utils import get_device_risk_level
-                SystemLog.objects.create(
-                    log_type='security',
-                    level='critical',
-                    message=f"Blocked login attempt from blocked device for {request.user.username}",
-                    user=request.user,
-                    ip_address=ip_address,
-                    metadata={
-                        'device_id': device.id,
-                        'country_code': country_code,
-                        'risk_score': device_risk_score,
-                        'risk_level': get_device_risk_level(device_risk_score),
-                        'reason': 'Device is blocked (not from allowed country)'
-                    }
-                )
-                
-                return JsonResponse(
-                    {
-                        'error': 'Device Blocked',
-                        'message': 'This device has been blocked because it is not from an allowed country.',
-                        'details': 'Access is restricted to Saudi Arabia only.',
-                        'device_id': device.id,
-                        'device_risk_score': device_risk_score,
-                        'device_risk_level': get_device_risk_level(device_risk_score),
-                        'country_detected': geo_data.get('country_name', 'Unknown'),
-                        'country_code': country_code,
-                        'contact': 'Please contact support if you believe this is an error.'
-                    },
-                    status=403
-                )
-            
-            # Device is trusted - allow access
+            # Update existing device
             if not created:
-                # Update existing device
                 device.last_seen_at = timezone.now()
                 device.last_ip = ip_address
-                device.save(update_fields=['last_seen_at', 'last_ip'])
-                print(f"✓ DEVICE ALLOWED: Device {device.id} (trusted={device.is_trusted}) for user {request.user.username}")
+                device.last_country_code = country_code
+                device.save(update_fields=['last_seen_at', 'last_ip', 'last_country_code'])
             
-            # Attach device to request
+            # Attach device to request (even if blocked - let login view handle blocking)
             request.device = device
         else:
             # Anonymous user

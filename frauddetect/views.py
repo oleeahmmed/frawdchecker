@@ -732,6 +732,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             allowed_countries = getattr(settings, 'ALLOWED_COUNTRIES', ['SA'])
             auto_trust = getattr(settings, 'AUTO_TRUST_DEVICES_FROM_ALLOWED_COUNTRIES', True)
             auto_block = getattr(settings, 'AUTO_BLOCK_DEVICES_FROM_BLOCKED_COUNTRIES', True)
+            auto_block_ips = getattr(settings, 'AUTO_BLOCK_NON_ALLOWED_COUNTRY_IPS', True)
             
             # Determine initial trust status
             is_from_allowed_country = country_code in allowed_countries
@@ -747,7 +748,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     'device_fingerprint': fingerprint_hash,
                     'is_trusted': initial_trust,
                     'is_blocked': initial_block,
-                    'status': 'blocked' if initial_block else 'normal'
+                    'status': 'blocked' if initial_block else 'normal',
+                    'last_country_code': country_code
                 }
             )
             
@@ -767,15 +769,52 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 # Update existing device
                 device.last_seen_at = timezone.now()
                 device.last_ip = ip_address
-                device.save(update_fields=['last_seen_at', 'last_ip'])
+                device.last_country_code = country_code
+                device.save(update_fields=['last_seen_at', 'last_ip', 'last_country_code'])
                 print(f"✓ Known device: {device.id}")
             
             # Rule 5: Check if device is blocked
             if device.is_blocked:
                 should_block = True
                 risk_score += 100
-                risk_reasons.append('Device is blocked')
+                risk_reasons.append('Device is blocked (not from allowed country)')
                 print(f"🚫 BLOCKED: Device {device.id} is blocked")
+                
+                # Auto-add IP to blocklist if enabled and not already blocked
+                if auto_block_ips and not is_from_allowed_country:
+                    ip_already_blocked = IPBlocklist.objects.filter(ip_address=ip_address).exists()
+                    if not ip_already_blocked:
+                        # Get first superuser for blocked_by field
+                        from django.contrib.auth.models import User as AuthUser
+                        system_admin = AuthUser.objects.filter(is_superuser=True).order_by('id').first()
+                        
+                        IPBlocklist.objects.create(
+                            ip_address=ip_address,
+                            reason=f"Automatic block: Login attempt from non-allowed country {country_code} ({geo_data.get('country_name')})",
+                            is_active=True,
+                            blocked_by=system_admin
+                        )
+                        blocked_by_username = system_admin.username if system_admin else 'System'
+                        print(f"🚫 IP AUTO-BLOCKED: {ip_address} added to blocklist (Country: {country_code}, Blocked by: {blocked_by_username})")
+                        
+                        # Log the auto-block
+                        SystemLog.objects.create(
+                            log_type='security',
+                            level='critical',
+                            message=f"IP {ip_address} automatically added to blocklist during login (Country: {country_code}, Blocked by: {blocked_by_username})",
+                            user=user,
+                            ip_address=ip_address,
+                            metadata={
+                                'country_code': country_code,
+                                'country_name': geo_data.get('country_name'),
+                                'city': geo_data.get('city'),
+                                'action': 'auto_blocked_on_login',
+                                'blocked_by': blocked_by_username,
+                                'device_id': device.id
+                            }
+                        )
+                    else:
+                        print(f"⚠️  IP already in blocklist: {ip_address}")
             
             # Rule 6: Untrusted device
             if not device.is_trusted:
@@ -792,43 +831,55 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             if risk_score >= 40:
                 is_suspicious = True
             
-            # Block if necessary
-            if should_block:
-                print(f"🚫 LOGIN BLOCKED: Risk score {risk_score}")
-                SystemLog.objects.create(
-                    log_type='security',
-                    level='critical',
-                    message=f"Blocked login attempt for {user.username} from {ip_address}",
-                    user=user,
-                    ip_address=ip_address,
-                    metadata={
-                        'risk_score': risk_score,
-                        'risk_reasons': risk_reasons,
-                        'device_id': device.id
-                    }
-                )
-                raise serializers.ValidationError({
-                    'error': 'Login blocked due to security concerns',
-                    'risk_score': risk_score,
-                    'reasons': risk_reasons
-                })
-            
-            # Create login event with risk assessment
+            # ═══════════════════════════════════════════════════════
+            # ALWAYS CREATE LOGIN EVENT (even if blocked)
+            # This allows admins to review and unblock later
+            # ═══════════════════════════════════════════════════════
             login_event = LoginEvent.objects.create(
                 user=user,
                 username=user.username,
                 device=device,
-                status='success',
+                status='blocked' if should_block else 'success',
                 ip_address=ip_address,
                 country_code=geo_data.get('country_code', 'Unknown'),
                 city=geo_data.get('city', 'Unknown'),
-                is_suspicious=is_suspicious,
+                is_suspicious=is_suspicious or should_block,
                 risk_score=risk_score,
                 risk_reasons=risk_reasons,
                 user_agent=request.META.get('HTTP_USER_AGENT', '')
             )
             
-            print(f"✓ Login event created: ID={login_event.id}, Risk={risk_score}, Suspicious={is_suspicious}")
+            print(f"✓ Login event created: ID={login_event.id}, Status={login_event.status}, Risk={risk_score}, Suspicious={is_suspicious}")
+            
+            # Block if necessary (AFTER creating all records)
+            if should_block:
+                print(f"🚫 LOGIN BLOCKED: Risk score {risk_score}")
+                SystemLog.objects.create(
+                    log_type='security',
+                    level='critical',
+                    message=f"Blocked login attempt for {user.username} from {ip_address} ({geo_data.get('city')}, {country_code})",
+                    user=user,
+                    ip_address=ip_address,
+                    metadata={
+                        'risk_score': risk_score,
+                        'risk_reasons': risk_reasons,
+                        'device_id': device.id,
+                        'login_event_id': login_event.id,
+                        'country_code': country_code,
+                        'country_name': geo_data.get('country_name')
+                    }
+                )
+                raise serializers.ValidationError({
+                    'error': 'Login blocked due to security concerns',
+                    'message': 'Your login attempt has been blocked. All details have been recorded.',
+                    'risk_score': risk_score,
+                    'reasons': risk_reasons,
+                    'device_id': device.id,
+                    'login_event_id': login_event.id,
+                    'country_detected': geo_data.get('country_name', 'Unknown'),
+                    'country_code': country_code,
+                    'contact': 'Please contact support if you believe this is an error.'
+                })
             
             # Create system log
             SystemLog.objects.create(
