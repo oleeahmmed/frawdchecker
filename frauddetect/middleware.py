@@ -66,8 +66,45 @@ class GeoRestrictionMiddleware(MiddlewareMixin):
                 # Block access
                 print(f"🚫 GEO-BLOCKED: Access from {country_code} ({geo_data.get('country_name')}) - IP: {ip_address}")
                 
-                # Log the attempt
-                from .models import SystemLog
+                # AUTOMATICALLY ADD IP TO BLOCKLIST (if enabled)
+                from .models import SystemLog, IPBlocklist
+                
+                auto_block_enabled = getattr(settings, 'AUTO_BLOCK_NON_ALLOWED_COUNTRY_IPS', True)
+                ip_already_blocked = False
+                
+                if auto_block_enabled:
+                    # Check if IP is already in blocklist
+                    ip_already_blocked = IPBlocklist.objects.filter(
+                        ip_address=ip_address
+                    ).exists()
+                    
+                    if not ip_already_blocked:
+                        # Add IP to blocklist
+                        IPBlocklist.objects.create(
+                            ip_address=ip_address,
+                            reason=f"Automatic block: Access attempt from non-allowed country {country_code} ({geo_data.get('country_name')})",
+                            is_active=True,
+                            blocked_by=None  # Automatic block (no user)
+                        )
+                        print(f"🚫 IP AUTO-BLOCKED: {ip_address} added to blocklist (Country: {country_code})")
+                        
+                        # Log the auto-block
+                        SystemLog.objects.create(
+                            log_type='security',
+                            level='critical',
+                            message=f"IP {ip_address} automatically added to blocklist (Country: {country_code})",
+                            ip_address=ip_address,
+                            metadata={
+                                'country_code': country_code,
+                                'country_name': geo_data.get('country_name'),
+                                'city': geo_data.get('city'),
+                                'action': 'auto_blocked'
+                            }
+                        )
+                    else:
+                        print(f"⚠️  IP already in blocklist: {ip_address}")
+                
+                # Log the blocked attempt
                 SystemLog.objects.create(
                     log_type='security',
                     level='critical',
@@ -77,7 +114,8 @@ class GeoRestrictionMiddleware(MiddlewareMixin):
                         'country_code': country_code,
                         'country_name': geo_data.get('country_name'),
                         'city': geo_data.get('city'),
-                        'allowed_countries': allowed_countries
+                        'allowed_countries': allowed_countries,
+                        'ip_auto_blocked': not ip_already_blocked
                     }
                 )
                 

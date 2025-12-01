@@ -261,6 +261,10 @@ ALLOWED_COUNTRIES = [
 # Options: 'block' (deny access), 'flag' (allow but mark suspicious)
 GEO_RESTRICTION_ACTION = 'block'  # Strict mode for KSA compliance
 
+# Automatically add non-allowed country IPs to blocklist
+# When enabled, IPs from non-allowed countries are permanently blocked
+AUTO_BLOCK_NON_ALLOWED_COUNTRY_IPS = True
+
 # Whitelist IPs (bypass geo-restriction)
 # Useful for admin access, testing, or specific trusted IPs
 GEO_RESTRICTION_WHITELIST_IPS = [
