@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from django.contrib.auth import authenticate, login
 from django.utils import timezone
 from django.db.models import Sum, Count, Q
+from django.conf import settings
 from datetime import timedelta
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiExample
 from drf_spectacular.types import OpenApiTypes
@@ -562,8 +563,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     Custom JWT Token with Device Tracking and Fraud Detection
     Supports login with username OR email
     """
-    username = serializers.CharField(required=False, allow_blank=True)
-    email = serializers.EmailField(required=False, allow_blank=True)
+    username_or_email = serializers.CharField(required=False, write_only=True)
+    username = serializers.CharField(required=False, write_only=True)
+    email = serializers.EmailField(required=False, write_only=True)
     
     @classmethod
     def get_token(cls, user):
@@ -577,26 +579,53 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
     
     def validate(self, attrs):
-        # Support login with username OR email
+        from django.contrib.auth.models import User
+        
+        # Get credentials
+        username_or_email = attrs.get('username_or_email', '').strip()
         username = attrs.get('username', '').strip()
         email = attrs.get('email', '').strip()
-        password = attrs.get('password')
+        password = attrs.get('password', '')
         
-        # Must provide either username or email
-        if not username and not email:
-            raise serializers.ValidationError({'error': 'Must provide either username or email'})
+        # Determine the username to use
+        final_username = None
         
-        # Try to find user by email if provided
-        if email and not username:
+        # Priority: username_or_email > username > email
+        if username_or_email:
+            # Check if it's an email
+            if '@' in username_or_email:
+                try:
+                    user_obj = User.objects.get(email=username_or_email)
+                    final_username = user_obj.username
+                except User.DoesNotExist:
+                    pass
+            else:
+                final_username = username_or_email
+        elif username:
+            final_username = username
+        elif email:
             try:
-                from django.contrib.auth.models import User
                 user_obj = User.objects.get(email=email)
-                attrs['username'] = user_obj.username
+                final_username = user_obj.username
             except User.DoesNotExist:
-                raise serializers.ValidationError({'error': 'Invalid credentials'})
+                pass
+        
+        # Must have a username to authenticate
+        if not final_username:
+            raise serializers.ValidationError({
+                'detail': 'Must provide username or email'
+            })
+        
+        # Set username for parent validation
+        attrs['username'] = final_username
         
         # Call parent validate
-        data = super().validate(attrs)
+        try:
+            data = super().validate(attrs)
+        except Exception as e:
+            raise serializers.ValidationError({
+                'detail': 'Invalid credentials'
+            })
         
         # Get request from context
         request = self.context.get('request')
@@ -622,7 +651,51 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             print(f"🔍 Login attempt - User: {user.username}, IP: {ip_address}")
             
             # ═══════════════════════════════════════════════════════
-            # FRAUD DETECTION RULES
+            # BYPASS: Superusers skip all fraud detection
+            # ═══════════════════════════════════════════════════════
+            if user.is_staff:
+                print(f"✓ SUPERUSER LOGIN: Bypassing all fraud detection for {user.username}")
+                
+                # Create minimal login event for superuser
+                geo_data = get_geo_location(ip_address)
+                LoginEvent.objects.create(
+                    user=user,
+                    username=user.username,
+                    device=None,
+                    status='success',
+                    ip_address=ip_address,
+                    country_code=geo_data.get('country_code', 'Unknown'),
+                    city=geo_data.get('city', 'Unknown'),
+                    is_suspicious=False,
+                    risk_score=0,
+                    risk_reasons=['Superuser - bypassed fraud detection'],
+                    user_agent=request.META.get('HTTP_USER_AGENT', '')
+                )
+                
+                # Add superuser info to response
+                data['device_id'] = 0
+                data['device_trusted'] = True
+                data['device_new'] = False
+                data['security'] = {
+                    'risk_score': 0,
+                    'risk_level': 'superuser',
+                    'is_suspicious': False,
+                    'requires_verification': False,
+                }
+                data['login_info'] = {
+                    'ip_address': ip_address,
+                    'country': geo_data.get('country_name', 'Unknown'),
+                    'country_code': geo_data.get('country_code', 'Unknown'),
+                    'city': geo_data.get('city', 'Unknown'),
+                    'region': geo_data.get('region', 'Unknown'),
+                }
+                data['superuser'] = True
+                
+                # Skip all fraud detection for superusers
+                return data
+            
+            # ═══════════════════════════════════════════════════════
+            # FRAUD DETECTION RULES (for regular users)
             # ═══════════════════════════════════════════════════════
             risk_score = 0
             risk_reasons = []
@@ -654,6 +727,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 is_suspicious = True
                 print(f"⚠️  Velocity check failed: Too many attempts")
             
+            # Determine device trust based on country (KSA compliance)
+            country_code = geo_data.get('country_code', 'Unknown')
+            allowed_countries = getattr(settings, 'ALLOWED_COUNTRIES', ['SA'])
+            auto_trust = getattr(settings, 'AUTO_TRUST_DEVICES_FROM_ALLOWED_COUNTRIES', True)
+            auto_block = getattr(settings, 'AUTO_BLOCK_DEVICES_FROM_BLOCKED_COUNTRIES', True)
+            
+            # Determine initial trust status
+            is_from_allowed_country = country_code in allowed_countries
+            initial_trust = is_from_allowed_country and auto_trust
+            initial_block = not is_from_allowed_country and auto_block
+            
             # Get or create device
             device, created = Device.objects.get_or_create(
                 user=user,
@@ -661,10 +745,18 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 defaults={
                     'last_ip': ip_address,
                     'device_fingerprint': fingerprint_hash,
-                    'is_trusted': False,
-                    'status': 'normal'
+                    'is_trusted': initial_trust,
+                    'is_blocked': initial_block,
+                    'status': 'blocked' if initial_block else 'normal'
                 }
             )
+            
+            # Log device trust decision
+            if created:
+                if initial_trust:
+                    print(f"✓ Device auto-trusted: From allowed country {country_code}")
+                if initial_block:
+                    print(f"🚫 Device auto-blocked: From non-allowed country {country_code}")
             
             # Rule 4: New device detection
             if created:
@@ -791,16 +883,32 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 @extend_schema(
     tags=['Authentication'],
-    description='Login with username and password to get JWT tokens',
+    description='Login with username/email and password to get JWT tokens',
     request=CustomTokenObtainPairSerializer,
 )
 class CustomTokenObtainPairView(TokenObtainPairView):
     """
-    Custom Login View with Device Tracking
+    Custom Login View with Device Tracking and Fraud Detection
+    
+    Supports login with username OR email
     
     POST /api/auth/login/
+    
+    Option 1 - Username:
     {
-        "username": "your_username",
+        "username": "john_doe",
+        "password": "your_password"
+    }
+    
+    Option 2 - Email:
+    {
+        "email": "john@example.com",
+        "password": "your_password"
+    }
+    
+    Option 3 - Username or Email (auto-detect):
+    {
+        "username_or_email": "john_doe",  // or "john@example.com"
         "password": "your_password"
     }
     
@@ -810,7 +918,9 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         "refresh": "eyJ0eXAiOiJKV1QiLCJhbGc...",
         "user": {...},
         "device_id": 1,
-        "device_trusted": true
+        "device_trusted": true,
+        "security": {...},
+        "login_info": {...}
     }
     """
     serializer_class = CustomTokenObtainPairSerializer

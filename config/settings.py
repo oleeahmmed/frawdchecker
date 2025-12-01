@@ -63,6 +63,7 @@ SITE_ID = 1
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # WhiteNoise for static files
+    'frauddetect.middleware.GeoRestrictionMiddleware',  # Geo-restriction (KSA compliance) - FIRST
     'frauddetect.middleware.IPBlocklistMiddleware',  # IP Block Check (BEFORE auth)
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -234,15 +235,56 @@ FRAUD_SETTINGS = {
 }
 
 # ============================================
+# 🌍 GEO-RESTRICTION SETTINGS (KSA Compliance)
+# ============================================
+# IMPORTANT: For Saudi Arabia data residency compliance
+# Only allow access from specific countries
+
+# Enable geo-restriction (set to False to disable)
+GEO_RESTRICTION_ENABLED = True
+
+# Allowed countries for access (ISO 3166-1 alpha-2 codes)
+# Primary: Saudi Arabia (SA)
+# Can add more countries as needed
+ALLOWED_COUNTRIES = [
+    'SA',  # Saudi Arabia (Primary)
+    # Add more countries here if needed in the future:
+    # 'AE',  # United Arab Emirates
+    # 'KW',  # Kuwait
+    # 'QA',  # Qatar
+    # 'BH',  # Bahrain
+    # 'OM',  # Oman
+    'BD',
+]
+
+# Action when access from non-allowed country
+# Options: 'block' (deny access), 'flag' (allow but mark suspicious)
+GEO_RESTRICTION_ACTION = 'block'  # Strict mode for KSA compliance
+
+# Whitelist IPs (bypass geo-restriction)
+# Useful for admin access, testing, or specific trusted IPs
+GEO_RESTRICTION_WHITELIST_IPS = [
+    # '203.0.113.50',  # Example: Office IP
+    # '198.51.100.0/24',  # Example: Office network
+]
+
+# Device trust based on country
+# Devices from allowed countries are automatically trusted
+AUTO_TRUST_DEVICES_FROM_ALLOWED_COUNTRIES = True
+
+# Block devices from non-allowed countries
+AUTO_BLOCK_DEVICES_FROM_BLOCKED_COUNTRIES = True
+
+# ============================================
 # 🌍 COUNTRY RISK LEVELS
 # ============================================
-# উচ্চ ঝুঁকিপূর্ণ দেশ
+# High-risk countries (for additional fraud detection)
 HIGH_RISK_COUNTRIES = ['YE', 'SY', 'IQ', 'SD', 'SO', 'LY', 'AF', 'IR', 'NG', 'PK', 'BD']
 
-# মাঝারি ঝুঁকিপূর্ণ দেশ
+# Medium-risk countries
 MEDIUM_RISK_COUNTRIES = ['EG', 'JO', 'MA', 'TN', 'TR', 'IN', 'CN', 'BR', 'MX']
 
-# নিম্ন ঝুঁকিপূর্ণ দেশ (নিরাপদ)
+# Low-risk countries (safe)
 LOW_RISK_COUNTRIES = ['SA', 'AE', 'KW', 'QA', 'BH', 'OM', 'US', 'CA', 'UK', 'GB', 'DE', 'FR']
 
 # ============================================
