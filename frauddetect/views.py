@@ -857,10 +857,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     else:
                         print(f"⚠️  IP already in blocklist: {ip_address}")
             
-            # Rule 6: Untrusted device
+            # Rule 6: Untrusted device (CRITICAL - BLOCKS LOGIN)
             if not device.is_trusted:
-                risk_score += 10
-                risk_reasons.append('Untrusted device')
+                should_block = True
+                risk_score += 100
+                risk_reasons.append('Untrusted device - only trusted devices allowed')
+                print(f"🚫 BLOCKED: Device {device.id} is not trusted")
             
             # Rule 7: IP change detection
             if not created and device.last_ip != ip_address:
