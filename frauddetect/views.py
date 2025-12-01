@@ -623,6 +623,47 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         try:
             data = super().validate(attrs)
         except Exception as e:
+            # ═══════════════════════════════════════════════════════
+            # FAILED LOGIN: Create LoginEvent for failed attempt
+            # ═══════════════════════════════════════════════════════
+            request = self.context.get('request')
+            if request:
+                from .utils import get_client_ip, get_geo_location
+                from .models import LoginEvent, SystemLog
+                
+                ip_address = get_client_ip(request)
+                geo_data = get_geo_location(ip_address)
+                
+                # Create failed login event
+                LoginEvent.objects.create(
+                    user=None,  # No user object for failed login
+                    username=final_username or 'Unknown',
+                    device=None,
+                    status='failed',
+                    ip_address=ip_address,
+                    country_code=geo_data.get('country_code', 'Unknown'),
+                    city=geo_data.get('city', 'Unknown'),
+                    is_suspicious=True,  # All failed logins are suspicious
+                    risk_score=10,
+                    risk_reasons=['Invalid credentials'],
+                    user_agent=request.META.get('HTTP_USER_AGENT', '')
+                )
+                
+                # Log failed attempt
+                SystemLog.objects.create(
+                    log_type='security',
+                    level='warning',
+                    message=f"Failed login attempt for {final_username or 'Unknown'} from {ip_address}",
+                    ip_address=ip_address,
+                    metadata={
+                        'username': final_username or 'Unknown',
+                        'country_code': geo_data.get('country_code'),
+                        'city': geo_data.get('city')
+                    }
+                )
+                
+                print(f"❌ FAILED LOGIN: Invalid credentials for {final_username or 'Unknown'} from {ip_address}")
+            
             raise serializers.ValidationError({
                 'detail': 'Invalid credentials'
             })
