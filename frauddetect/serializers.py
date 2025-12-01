@@ -180,29 +180,47 @@ class UserDetailsSerializer(serializers.ModelSerializer):
 class CustomLoginSerializer(LoginSerializer):
     """
     Custom Login Serializer with Device Tracking
+    Supports login with username OR email
     """
-    username = serializers.CharField(required=True)
+    username = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
     password = serializers.CharField(style={'input_type': 'password'}, write_only=True)
     
     def validate(self, attrs):
-        username = attrs.get('username')
+        username = attrs.get('username', '').strip()
+        email = attrs.get('email', '').strip()
         password = attrs.get('password')
         
+        # Must provide either username or email
+        if not username and not email:
+            raise serializers.ValidationError('Must provide either username or email.')
+        
+        if not password:
+            raise serializers.ValidationError('Password is required.')
+        
+        # Try to find user by email if provided
+        user = None
+        if email:
+            try:
+                from django.contrib.auth.models import User
+                user_obj = User.objects.get(email=email)
+                username = user_obj.username
+            except User.DoesNotExist:
+                pass
+        
+        # Authenticate
         if username and password:
             user = authenticate(
                 request=self.context.get('request'),
                 username=username,
                 password=password
             )
-            
-            if not user:
-                raise serializers.ValidationError('Unable to log in with provided credentials.')
-            
-            if not user.is_active:
-                raise serializers.ValidationError('User account is disabled.')
-            
-        else:
-            raise serializers.ValidationError('Must include "username" and "password".')
+        
+        if not user:
+            raise serializers.ValidationError('Unable to log in with provided credentials.')
+        
+        if not user.is_active:
+            raise serializers.ValidationError('User account is disabled.')
         
         attrs['user'] = user
         return attrs

@@ -559,8 +559,11 @@ from django.contrib.auth.signals import user_logged_in
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
-    Custom JWT Token with Device Tracking
+    Custom JWT Token with Device Tracking and Fraud Detection
+    Supports login with username OR email
     """
+    username = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
     
     @classmethod
     def get_token(cls, user):
@@ -574,16 +577,42 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
     
     def validate(self, attrs):
+        # Support login with username OR email
+        username = attrs.get('username', '').strip()
+        email = attrs.get('email', '').strip()
+        password = attrs.get('password')
+        
+        # Must provide either username or email
+        if not username and not email:
+            raise serializers.ValidationError({'error': 'Must provide either username or email'})
+        
+        # Try to find user by email if provided
+        if email and not username:
+            try:
+                from django.contrib.auth.models import User
+                user_obj = User.objects.get(email=email)
+                attrs['username'] = user_obj.username
+            except User.DoesNotExist:
+                raise serializers.ValidationError({'error': 'Invalid credentials'})
+        
+        # Call parent validate
         data = super().validate(attrs)
         
         # Get request from context
         request = self.context.get('request')
         user = self.user
         
-        # Track device and create login event
+        # Track device and create login event with fraud detection
         if request:
-            from .utils import calculate_device_fingerprint, get_client_ip, get_geo_location
-            from .models import Device, LoginEvent
+            from .utils import (
+                calculate_device_fingerprint, 
+                get_client_ip, 
+                get_geo_location,
+                get_country_risk_level,
+                check_velocity,
+                check_ip_blocklist
+            )
+            from .models import Device, LoginEvent, SystemLog, IPBlocklist
             from django.utils import timezone
             
             fingerprint_hash = calculate_device_fingerprint(request)
@@ -592,9 +621,38 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             # Log IP detection
             print(f"🔍 Login attempt - User: {user.username}, IP: {ip_address}")
             
+            # ═══════════════════════════════════════════════════════
+            # FRAUD DETECTION RULES
+            # ═══════════════════════════════════════════════════════
+            risk_score = 0
+            risk_reasons = []
+            is_suspicious = False
+            should_block = False
+            
+            # Rule 1: Check if IP is blocked
+            if check_ip_blocklist(ip_address):
+                should_block = True
+                risk_score += 100
+                risk_reasons.append('IP address is blocked')
+                print(f"🚫 BLOCKED: IP {ip_address} is in blocklist")
+            
             # Get geolocation
             geo_data = get_geo_location(ip_address)
             print(f"📍 Location: {geo_data.get('country_name', 'Unknown')} ({geo_data.get('country_code', 'Unknown')}) - {geo_data.get('city', 'Unknown')}")
+            
+            # Rule 2: Country risk assessment
+            country_risk = get_country_risk_level(geo_data.get('country_code'))
+            risk_score += country_risk['score']
+            if country_risk['level'] == 'high':
+                risk_reasons.append(country_risk['reason'])
+                print(f"⚠️  High-risk country: {country_risk['reason']}")
+            
+            # Rule 3: Velocity check - too many login attempts
+            if check_velocity(user, 'login', 60):
+                risk_score += 25
+                risk_reasons.append('Too many login attempts in short time')
+                is_suspicious = True
+                print(f"⚠️  Velocity check failed: Too many attempts")
             
             # Get or create device
             device, created = Device.objects.get_or_create(
@@ -603,15 +661,67 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 defaults={
                     'last_ip': ip_address,
                     'device_fingerprint': fingerprint_hash,
+                    'is_trusted': False,
+                    'status': 'normal'
                 }
             )
             
-            if not created:
+            # Rule 4: New device detection
+            if created:
+                risk_score += 15
+                risk_reasons.append('Login from new device')
+                print(f"🆕 New device detected: {device.id}")
+            else:
+                # Update existing device
                 device.last_seen_at = timezone.now()
                 device.last_ip = ip_address
                 device.save(update_fields=['last_seen_at', 'last_ip'])
+                print(f"✓ Known device: {device.id}")
             
-            # Create login event with detailed location
+            # Rule 5: Check if device is blocked
+            if device.is_blocked:
+                should_block = True
+                risk_score += 100
+                risk_reasons.append('Device is blocked')
+                print(f"🚫 BLOCKED: Device {device.id} is blocked")
+            
+            # Rule 6: Untrusted device
+            if not device.is_trusted:
+                risk_score += 10
+                risk_reasons.append('Untrusted device')
+            
+            # Rule 7: IP change detection
+            if not created and device.last_ip != ip_address:
+                risk_score += 20
+                risk_reasons.append(f'IP changed from {device.last_ip} to {ip_address}')
+                print(f"⚠️  IP changed: {device.last_ip} → {ip_address}")
+            
+            # Determine if suspicious
+            if risk_score >= 40:
+                is_suspicious = True
+            
+            # Block if necessary
+            if should_block:
+                print(f"🚫 LOGIN BLOCKED: Risk score {risk_score}")
+                SystemLog.objects.create(
+                    log_type='security',
+                    level='critical',
+                    message=f"Blocked login attempt for {user.username} from {ip_address}",
+                    user=user,
+                    ip_address=ip_address,
+                    metadata={
+                        'risk_score': risk_score,
+                        'risk_reasons': risk_reasons,
+                        'device_id': device.id
+                    }
+                )
+                raise serializers.ValidationError({
+                    'error': 'Login blocked due to security concerns',
+                    'risk_score': risk_score,
+                    'reasons': risk_reasons
+                })
+            
+            # Create login event with risk assessment
             login_event = LoginEvent.objects.create(
                 user=user,
                 username=user.username,
@@ -620,16 +730,39 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 ip_address=ip_address,
                 country_code=geo_data.get('country_code', 'Unknown'),
                 city=geo_data.get('city', 'Unknown'),
-                is_suspicious=False,
-                risk_score=0,
+                is_suspicious=is_suspicious,
+                risk_score=risk_score,
+                risk_reasons=risk_reasons,
                 user_agent=request.META.get('HTTP_USER_AGENT', '')
             )
             
-            print(f"✓ Login event created: ID={login_event.id}, Country={login_event.country}, City={login_event.city}")
+            print(f"✓ Login event created: ID={login_event.id}, Risk={risk_score}, Suspicious={is_suspicious}")
+            
+            # Create system log
+            SystemLog.objects.create(
+                log_type='login',
+                level='warning' if is_suspicious else 'info',
+                message=f"User {user.username} logged in from {ip_address} ({geo_data.get('city')}, {geo_data.get('country_code')})",
+                user=user,
+                ip_address=ip_address,
+                metadata={
+                    'risk_score': risk_score,
+                    'risk_reasons': risk_reasons,
+                    'device_id': device.id,
+                    'is_new_device': created
+                }
+            )
             
             # Add device and location info to response
             data['device_id'] = device.id
             data['device_trusted'] = device.is_trusted
+            data['device_new'] = created
+            data['security'] = {
+                'risk_score': risk_score,
+                'risk_level': 'high' if risk_score >= 70 else 'medium' if risk_score >= 40 else 'low',
+                'is_suspicious': is_suspicious,
+                'requires_verification': is_suspicious and not device.is_trusted,
+            }
             data['login_info'] = {
                 'ip_address': ip_address,
                 'country': geo_data.get('country_name', 'Unknown'),
@@ -637,6 +770,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'city': geo_data.get('city', 'Unknown'),
                 'region': geo_data.get('region', 'Unknown'),
             }
+            
+            # Warning message if suspicious
+            if is_suspicious:
+                data['warning'] = 'This login appears suspicious. Additional verification may be required.'
+                print(f"⚠️  SUSPICIOUS LOGIN: {', '.join(risk_reasons)}")
         
         # Add user info to response
         data['user'] = {

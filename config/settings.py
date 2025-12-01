@@ -412,8 +412,12 @@ REST_AUTH = {
 # ============================================
 # DJANGO ALLAUTH CONFIGURATION
 # ============================================
-ACCOUNT_AUTHENTICATION_METHOD = 'username'
-ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_LOGIN_METHODS = {'username', 'email'}  # Allow both username and email
 ACCOUNT_EMAIL_VERIFICATION = 'optional'
-ACCOUNT_USERNAME_REQUIRED = True
+ACCOUNT_SIGNUP_FIELDS = [
+    'email*',      # Required
+    'username*',   # Required
+    'password1*',  # Required
+    'password2*',  # Required
+]
 ACCOUNT_USER_MODEL_USERNAME_FIELD = 'username'
