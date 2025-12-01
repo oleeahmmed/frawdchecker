@@ -79,26 +79,33 @@ class GeoRestrictionMiddleware(MiddlewareMixin):
                     ).exists()
                     
                     if not ip_already_blocked:
+                        # Get first superuser (system admin) for blocked_by field
+                        from django.contrib.auth.models import User
+                        system_admin = User.objects.filter(is_superuser=True).order_by('id').first()
+                        
                         # Add IP to blocklist
                         IPBlocklist.objects.create(
                             ip_address=ip_address,
                             reason=f"Automatic block: Access attempt from non-allowed country {country_code} ({geo_data.get('country_name')})",
                             is_active=True,
-                            blocked_by=None  # Automatic block (no user)
+                            blocked_by=system_admin  # Set to first superuser
                         )
-                        print(f"🚫 IP AUTO-BLOCKED: {ip_address} added to blocklist (Country: {country_code})")
+                        blocked_by_username = system_admin.username if system_admin else 'System'
+                        print(f"🚫 IP AUTO-BLOCKED: {ip_address} added to blocklist (Country: {country_code}, Blocked by: {blocked_by_username})")
                         
                         # Log the auto-block
                         SystemLog.objects.create(
                             log_type='security',
                             level='critical',
-                            message=f"IP {ip_address} automatically added to blocklist (Country: {country_code})",
+                            message=f"IP {ip_address} automatically added to blocklist (Country: {country_code}, Blocked by: {blocked_by_username})",
+                            user=system_admin,
                             ip_address=ip_address,
                             metadata={
                                 'country_code': country_code,
                                 'country_name': geo_data.get('country_name'),
                                 'city': geo_data.get('city'),
-                                'action': 'auto_blocked'
+                                'action': 'auto_blocked',
+                                'blocked_by': blocked_by_username
                             }
                         )
                     else:
