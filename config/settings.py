@@ -254,7 +254,7 @@ ALLOWED_COUNTRIES = [
     # 'QA',  # Qatar
     # 'BH',  # Bahrain
     # 'OM',  # Oman
-    # 'BD',
+    'BD',
 ]
 
 # Action when access from non-allowed country
