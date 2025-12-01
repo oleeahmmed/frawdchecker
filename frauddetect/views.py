@@ -204,13 +204,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
         """
         🔥 নতুন লেনদেন তৈরি - Fraud Detection সহ
         """
-        # Step 1: IP Blocklist Check
+        # Step 1: Get IP (already checked by middleware)
         ip = get_client_ip(request)
-        if check_ip_blocklist(ip):
-            return Response(
-                {'error': 'Your IP address is blocked'},
-                status=status.HTTP_403_FORBIDDEN
-            )
         
         # Step 2: Validate Data
         serializer = TransactionCreateSerializer(data=request.data)

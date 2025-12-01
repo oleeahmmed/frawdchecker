@@ -1,32 +1,69 @@
 from django.utils.deprecation import MiddlewareMixin
 from django.utils import timezone
-from .models import Device
+from django.http import JsonResponse
+from .models import Device, IPBlocklist
 from .utils import calculate_device_fingerprint, get_client_ip
+
+
+class IPBlocklistMiddleware(MiddlewareMixin):
+    """
+    IP Blocklist Check - Runs BEFORE authentication
+    
+    Purpose:
+    1. Check if IP is blocked
+    2. Block request immediately if IP is blacklisted
+    3. No authentication needed - security first!
+    """
+    
+    def process_request(self, request):
+        # Get client IP
+        ip_address = get_client_ip(request)
+        
+        # Check if IP is blocked
+        is_blocked = IPBlocklist.objects.filter(
+            ip_address=ip_address,
+            is_active=True
+        ).exists()
+        
+        if is_blocked:
+            # Return 403 Forbidden immediately
+            return JsonResponse(
+                {
+                    'error': 'Access Denied',
+                    'message': 'Your IP address has been blocked due to suspicious activity.',
+                    'ip_address': ip_address,
+                    'contact': 'Please contact support if you believe this is an error.'
+                },
+                status=403
+            )
+        
+        # IP is not blocked, continue processing
+        return None
 
 
 class DeviceFingerprintMiddleware(MiddlewareMixin):
     """
-    প্রতিটি Request এ Device Fingerprint ট্র্যাক করে
+    Device Fingerprint Tracking - Runs AFTER authentication
     
-    কাজ:
-    1. Request থেকে device fingerprint বের করে
-    2. Device ডাটাবেসে থাকলে update করে
-    3. নতুন হলে create করে
-    4. Request object এ device attach করে
+    Purpose:
+    1. Extract device fingerprint from request
+    2. Update device in database if exists
+    3. Create new device if not exists
+    4. Attach device object to request
     """
     
     def process_request(self, request):
-        # শুধুমাত্র authenticated user দের জন্য
+        # Get IP address (always needed)
+        ip_address = get_client_ip(request)
+        request.client_ip = ip_address
+        
+        # Only track devices for authenticated users
         if request.user.is_authenticated:
-            # Fingerprint বের করা
+            # Calculate fingerprint
             fingerprint_hash = calculate_device_fingerprint(request)
-            ip_address = get_client_ip(request)
-            
-            # Request এ attach করা (পরে ব্যবহারের জন্য)
             request.device_fingerprint = fingerprint_hash
-            request.client_ip = ip_address
             
-            # Device খোঁজা বা তৈরি করা
+            # Get or create device
             device, created = Device.objects.get_or_create(
                 user=request.user,
                 fingerprint_hash=fingerprint_hash,
@@ -36,17 +73,29 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
                 }
             )
             
+            # Check if device is blocked
+            if device.is_blocked:
+                return JsonResponse(
+                    {
+                        'error': 'Device Blocked',
+                        'message': 'This device has been blocked due to suspicious activity.',
+                        'device_id': device.id,
+                        'contact': 'Please contact support for assistance.'
+                    },
+                    status=403
+                )
+            
+            # Update existing device
             if not created:
-                # যদি আগে থেকে থাকে, তাহলে update করা
                 device.last_seen_at = timezone.now()
                 device.last_ip = ip_address
                 device.save(update_fields=['last_seen_at', 'last_ip'])
             
-            # Request এ device attach করা
+            # Attach device to request
             request.device = device
         else:
+            # Anonymous user
             request.device = None
             request.device_fingerprint = None
-            request.client_ip = get_client_ip(request)
         
         return None

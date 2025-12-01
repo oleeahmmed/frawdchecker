@@ -63,6 +63,7 @@ SITE_ID = 1
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # WhiteNoise for static files
+    'frauddetect.middleware.IPBlocklistMiddleware',  # IP Block Check (BEFORE auth)
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -70,7 +71,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',  # Required for allauth
-    'frauddetect.middleware.DeviceFingerprintMiddleware',  # Our custom middleware
+    'frauddetect.middleware.DeviceFingerprintMiddleware',  # Device tracking (AFTER auth)
 ]
 
 ROOT_URLCONF = 'config.urls'
