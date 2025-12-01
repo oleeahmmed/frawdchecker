@@ -27,8 +27,12 @@ class GeoRestrictionMiddleware(MiddlewareMixin):
         if not getattr(settings, 'GEO_RESTRICTION_ENABLED', False):
             return None
         
-        # Skip for admin panel and static files
-        if request.path.startswith('/admin/') or request.path.startswith('/static/'):
+        # Skip for admin panel, static files, and authentication endpoints
+        # IMPORTANT: Allow login page access so admins can login to unblock IPs
+        if (request.path.startswith('/admin/') or 
+            request.path.startswith('/static/') or
+            request.path.startswith('/media/') or
+            request.path.startswith('/api/auth/')):  # Allow all auth endpoints
             return None
         
         # BYPASS: Allow ONLY superusers unrestricted access (not regular staff)
@@ -190,6 +194,14 @@ class IPBlocklistMiddleware(MiddlewareMixin):
     """
     
     def process_request(self, request):
+        # Skip for authentication endpoints
+        # IMPORTANT: Allow login page access so admins can login to unblock IPs
+        if (request.path.startswith('/admin/') or 
+            request.path.startswith('/static/') or
+            request.path.startswith('/media/') or
+            request.path.startswith('/api/auth/')):  # Allow all auth endpoints
+            return None
+        
         # BYPASS: Allow ONLY superusers unrestricted access (not regular staff)
         # Check if user is authenticated (user attribute may not exist yet)
         if hasattr(request, 'user') and request.user.is_authenticated and request.user.is_superuser:

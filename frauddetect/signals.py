@@ -33,8 +33,8 @@ def log_successful_login(sender, request, user, **kwargs):
     risk_reasons = []
     risk_score = 0
     
-    # উচ্চ ঝুঁকির দেশ থেকে লগইন
-    if country_risk['level'] == 'high':
+    # অনুমোদিত নয় এমন দেশ থেকে লগইন
+    if country_risk['level'] != 'low':
         is_suspicious = True
         risk_reasons.append(country_risk['reason'])
         risk_score += country_risk['score']

@@ -713,12 +713,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             geo_data = get_geo_location(ip_address)
             print(f"📍 Location: {geo_data.get('country_name', 'Unknown')} ({geo_data.get('country_code', 'Unknown')}) - {geo_data.get('city', 'Unknown')}")
             
-            # Rule 2: Country risk assessment
+            # Rule 2: Country risk assessment (simplified: allowed or not allowed)
             country_risk = get_country_risk_level(geo_data.get('country_code'))
             risk_score += country_risk['score']
-            if country_risk['level'] == 'high':
+            if country_risk['level'] != 'low':
                 risk_reasons.append(country_risk['reason'])
-                print(f"⚠️  High-risk country: {country_risk['reason']}")
+                print(f"⚠️  Non-allowed country: {country_risk['reason']}")
             
             # Rule 3: Velocity check - too many login attempts
             if check_velocity(user, 'login', 60):

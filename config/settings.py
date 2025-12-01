@@ -280,16 +280,11 @@ AUTO_TRUST_DEVICES_FROM_ALLOWED_COUNTRIES = True
 AUTO_BLOCK_DEVICES_FROM_BLOCKED_COUNTRIES = True
 
 # ============================================
-# 🌍 COUNTRY RISK LEVELS
+# 🌍 COUNTRY RISK LEVELS (SIMPLIFIED)
 # ============================================
-# High-risk countries (for additional fraud detection)
-HIGH_RISK_COUNTRIES = ['YE', 'SY', 'IQ', 'SD', 'SO', 'LY', 'AF', 'IR', 'NG', 'PK', 'BD']
-
-# Medium-risk countries
-MEDIUM_RISK_COUNTRIES = ['EG', 'JO', 'MA', 'TN', 'TR', 'IN', 'CN', 'BR', 'MX']
-
-# Low-risk countries (safe)
-LOW_RISK_COUNTRIES = ['SA', 'AE', 'KW', 'QA', 'BH', 'OM', 'US', 'CA', 'UK', 'GB', 'DE', 'FR']
+# Simple binary approach: Only ALLOWED_COUNTRIES are safe
+# All other countries are considered high-risk and will be blocked
+# No need for separate HIGH/MEDIUM/LOW risk categories
 
 # ============================================
 # 🎨 DJANGO UNFOLD CONFIGURATION

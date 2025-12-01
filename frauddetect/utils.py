@@ -61,37 +61,29 @@ def get_country_risk_level(country_code):
     """
     দেশের কোড থেকে ঝুঁকি স্তর নির্ধারণ করে
     
+    Simplified approach: Only ALLOWED_COUNTRIES are safe
+    All other countries are considered high-risk
+    
     Returns:
         dict: level, score, reason
     """
     if not country_code:
-        return {'level': 'medium', 'score': 20, 'reason': 'Unknown Country'}
+        return {'level': 'high', 'score': 50, 'reason': 'Unknown Country'}
     
     country = country_code.upper()
+    allowed_countries = getattr(settings, 'ALLOWED_COUNTRIES', ['SA'])
     
-    if country in settings.HIGH_RISK_COUNTRIES:
-        return {
-            'level': 'high', 
-            'score': 30, 
-            'reason': f'High-Risk Country ({country})'
-        }
-    elif country in settings.MEDIUM_RISK_COUNTRIES:
-        return {
-            'level': 'medium', 
-            'score': 15, 
-            'reason': f'Medium-Risk Country ({country})'
-        }
-    elif country in settings.LOW_RISK_COUNTRIES:
+    if country in allowed_countries:
         return {
             'level': 'low', 
-            'score': 5, 
-            'reason': f'Low-Risk Country ({country})'
+            'score': 0, 
+            'reason': f'Allowed Country ({country})'
         }
     else:
         return {
-            'level': 'medium', 
-            'score': 20, 
-            'reason': f'Unknown Country ({country})'
+            'level': 'high', 
+            'score': 50, 
+            'reason': f'Non-Allowed Country ({country})'
         }
 
 
