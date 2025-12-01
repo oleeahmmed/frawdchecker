@@ -616,15 +616,107 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'detail': 'Must provide username or email'
             })
         
+        # ═══════════════════════════════════════════════════════
+        # PRE-AUTHENTICATION SECURITY CHECKS
+        # Check IP, Country, Device BEFORE authenticating
+        # ═══════════════════════════════════════════════════════
+        request = self.context.get('request')
+        if request:
+            from .utils import (
+                calculate_device_fingerprint, 
+                get_client_ip, 
+                get_geo_location,
+                check_ip_blocklist
+            )
+            from .models import Device, LoginEvent, SystemLog, IPBlocklist
+            from django.utils import timezone
+            
+            ip_address = get_client_ip(request)
+            fingerprint_hash = calculate_device_fingerprint(request)
+            geo_data = get_geo_location(ip_address)
+            country_code = geo_data.get('country_code', 'Unknown')
+            
+            print(f"🔍 PRE-AUTH CHECK - Username: {final_username}, IP: {ip_address}, Country: {country_code}")
+            
+            # Check 1: IP Blocklist (already checked by middleware, but double-check)
+            if check_ip_blocklist(ip_address):
+                print(f"🚫 PRE-AUTH BLOCKED: IP {ip_address} is in blocklist")
+                
+                # Log the attempt
+                LoginEvent.objects.create(
+                    user=None,
+                    username=final_username,
+                    device=None,
+                    status='blocked',
+                    ip_address=ip_address,
+                    country_code=country_code,
+                    city=geo_data.get('city', 'Unknown'),
+                    is_suspicious=True,
+                    risk_score=100,
+                    risk_reasons=['IP address is blocked'],
+                    user_agent=request.META.get('HTTP_USER_AGENT', '')
+                )
+                
+                raise serializers.ValidationError({
+                    'error': 'Access Denied',
+                    'message': 'Your IP address has been blocked due to suspicious activity.',
+                    'ip_address': ip_address,
+                    'contact': 'Please contact support if you believe this is an error.'
+                })
+            
+            # Check 2: Country Restriction
+            allowed_countries = getattr(settings, 'ALLOWED_COUNTRIES', ['SA'])
+            if country_code not in allowed_countries and country_code != 'LOCAL':
+                print(f"🚫 PRE-AUTH BLOCKED: Non-allowed country {country_code}")
+                
+                # Auto-block IP if enabled
+                auto_block_ips = getattr(settings, 'AUTO_BLOCK_NON_ALLOWED_COUNTRY_IPS', True)
+                if auto_block_ips:
+                    ip_already_blocked = IPBlocklist.objects.filter(ip_address=ip_address).exists()
+                    if not ip_already_blocked:
+                        # Get first superuser for blocked_by field
+                        system_admin = User.objects.filter(is_superuser=True).order_by('id').first()
+                        
+                        IPBlocklist.objects.create(
+                            ip_address=ip_address,
+                            reason=f"Automatic block: Login attempt from non-allowed country {country_code} ({geo_data.get('country_name')})",
+                            is_active=True,
+                            blocked_by=system_admin
+                        )
+                        print(f"🚫 IP AUTO-BLOCKED: {ip_address} (Country: {country_code})")
+                
+                # Log the attempt
+                LoginEvent.objects.create(
+                    user=None,
+                    username=final_username,
+                    device=None,
+                    status='blocked',
+                    ip_address=ip_address,
+                    country_code=country_code,
+                    city=geo_data.get('city', 'Unknown'),
+                    is_suspicious=True,
+                    risk_score=100,
+                    risk_reasons=[f'Non-allowed country: {country_code}'],
+                    user_agent=request.META.get('HTTP_USER_AGENT', '')
+                )
+                
+                raise serializers.ValidationError({
+                    'error': 'Access Denied',
+                    'message': 'Access to this service is restricted to Saudi Arabia only.',
+                    'country_detected': geo_data.get('country_name', 'Unknown'),
+                    'country_code': country_code,
+                    'contact': 'Please contact support if you believe this is an error.'
+                })
+        
         # Set username for parent validation
         attrs['username'] = final_username
         
-        # Call parent validate
+        # Call parent validate (authenticate user)
         try:
             data = super().validate(attrs)
         except Exception as e:
             # ═══════════════════════════════════════════════════════
-            # FAILED LOGIN: Create LoginEvent for failed attempt
+            # FAILED LOGIN: Invalid credentials
             # ═══════════════════════════════════════════════════════
             request = self.context.get('request')
             if request:
@@ -672,7 +764,10 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         request = self.context.get('request')
         user = self.user
         
-        # Track device and create login event with fraud detection
+        # ═══════════════════════════════════════════════════════
+        # POST-AUTHENTICATION: Device tracking and fraud detection
+        # User credentials are valid, now check device trust
+        # ═══════════════════════════════════════════════════════
         if request:
             from .utils import (
                 calculate_device_fingerprint, 
@@ -680,32 +775,32 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 get_geo_location,
                 get_country_risk_level,
                 check_velocity,
-                check_ip_blocklist
+                calculate_device_risk_score
             )
-            from .models import Device, LoginEvent, SystemLog, IPBlocklist
+            from .models import Device, LoginEvent, SystemLog
             from django.utils import timezone
             
             fingerprint_hash = calculate_device_fingerprint(request)
             ip_address = get_client_ip(request)
+            geo_data = get_geo_location(ip_address)
+            country_code = geo_data.get('country_code', 'Unknown')
             
-            # Log IP detection
-            print(f"🔍 Login attempt - User: {user.username}, IP: {ip_address}")
+            print(f"🔍 POST-AUTH CHECK - User: {user.username}, IP: {ip_address}, Country: {country_code}")
             
             # ═══════════════════════════════════════════════════════
-            # BYPASS: ONLY superusers skip all fraud detection (not regular staff)
+            # BYPASS: ONLY superusers skip device checks
             # ═══════════════════════════════════════════════════════
             if user.is_superuser:
-                print(f"✓ SUPERUSER LOGIN: Bypassing all fraud detection for {user.username}")
+                print(f"✓ SUPERUSER LOGIN: Bypassing device checks for {user.username}")
                 
                 # Create minimal login event for superuser
-                geo_data = get_geo_location(ip_address)
                 LoginEvent.objects.create(
                     user=user,
                     username=user.username,
                     device=None,
                     status='success',
                     ip_address=ip_address,
-                    country_code=geo_data.get('country_code', 'Unknown'),
+                    country_code=country_code,
                     city=geo_data.get('city', 'Unknown'),
                     is_suspicious=False,
                     risk_score=0,
@@ -726,157 +821,102 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 data['login_info'] = {
                     'ip_address': ip_address,
                     'country': geo_data.get('country_name', 'Unknown'),
-                    'country_code': geo_data.get('country_code', 'Unknown'),
+                    'country_code': country_code,
                     'city': geo_data.get('city', 'Unknown'),
                     'region': geo_data.get('region', 'Unknown'),
                 }
                 data['superuser'] = True
                 
-                # Skip all fraud detection for superusers
                 return data
             
             # ═══════════════════════════════════════════════════════
-            # FRAUD DETECTION RULES (for regular users)
+            # DEVICE CHECK: Get or create device
             # ═══════════════════════════════════════════════════════
-            risk_score = 0
-            risk_reasons = []
-            is_suspicious = False
-            should_block = False
-            
-            # Rule 1: Check if IP is blocked
-            if check_ip_blocklist(ip_address):
-                should_block = True
-                risk_score += 100
-                risk_reasons.append('IP address is blocked')
-                print(f"🚫 BLOCKED: IP {ip_address} is in blocklist")
-            
-            # Get geolocation
-            geo_data = get_geo_location(ip_address)
-            print(f"📍 Location: {geo_data.get('country_name', 'Unknown')} ({geo_data.get('country_code', 'Unknown')}) - {geo_data.get('city', 'Unknown')}")
-            
-            # Rule 2: Country risk assessment (simplified: allowed or not allowed)
-            country_risk = get_country_risk_level(geo_data.get('country_code'))
-            risk_score += country_risk['score']
-            if country_risk['level'] != 'low':
-                risk_reasons.append(country_risk['reason'])
-                print(f"⚠️  Non-allowed country: {country_risk['reason']}")
-            
-            # Rule 3: Velocity check - too many login attempts
-            if check_velocity(user, 'login', 60):
-                risk_score += 25
-                risk_reasons.append('Too many login attempts in short time')
-                is_suspicious = True
-                print(f"⚠️  Velocity check failed: Too many attempts")
-            
-            # Determine device trust based on country (KSA compliance)
-            country_code = geo_data.get('country_code', 'Unknown')
             allowed_countries = getattr(settings, 'ALLOWED_COUNTRIES', ['SA'])
-            auto_trust = getattr(settings, 'AUTO_TRUST_DEVICES_FROM_ALLOWED_COUNTRIES', True)
-            auto_block = getattr(settings, 'AUTO_BLOCK_DEVICES_FROM_BLOCKED_COUNTRIES', True)
-            auto_block_ips = getattr(settings, 'AUTO_BLOCK_NON_ALLOWED_COUNTRY_IPS', True)
+            is_from_allowed_country = country_code in allowed_countries or country_code == 'LOCAL'
             
-            # Determine initial trust status
-            is_from_allowed_country = country_code in allowed_countries
-            initial_trust = is_from_allowed_country and auto_trust
-            initial_block = not is_from_allowed_country and auto_block
-            
-            # Get or create device
-            device, created = Device.objects.get_or_create(
-                user=user,
-                fingerprint_hash=fingerprint_hash,
-                defaults={
-                    'last_ip': ip_address,
-                    'device_fingerprint': fingerprint_hash,
-                    'is_trusted': initial_trust,
-                    'is_blocked': initial_block,
-                    'status': 'blocked' if initial_block else 'normal',
-                    'last_country_code': country_code
-                }
-            )
-            
-            # Log device trust decision
-            if created:
-                if initial_trust:
-                    print(f"✓ Device auto-trusted: From allowed country {country_code}")
-                if initial_block:
-                    print(f"🚫 Device auto-blocked: From non-allowed country {country_code}")
-            
-            # Rule 4: New device detection
-            if created:
-                risk_score += 15
-                risk_reasons.append('Login from new device')
-                print(f"🆕 New device detected: {device.id}")
-            else:
+            # Try to get existing device first
+            try:
+                device = Device.objects.get(
+                    user=user,
+                    fingerprint_hash=fingerprint_hash
+                )
+                device_created = False
+                
                 # Update existing device
                 device.last_seen_at = timezone.now()
                 device.last_ip = ip_address
                 device.last_country_code = country_code
                 device.save(update_fields=['last_seen_at', 'last_ip', 'last_country_code'])
-                print(f"✓ Known device: {device.id}")
-            
-            # Rule 5: Check if device is blocked
-            if device.is_blocked:
-                should_block = True
-                risk_score += 100
-                risk_reasons.append('Device is blocked (not from allowed country)')
-                print(f"🚫 BLOCKED: Device {device.id} is blocked")
                 
-                # Auto-add IP to blocklist if enabled and not already blocked
-                if auto_block_ips and not is_from_allowed_country:
-                    ip_already_blocked = IPBlocklist.objects.filter(ip_address=ip_address).exists()
-                    if not ip_already_blocked:
-                        # Get first superuser for blocked_by field
-                        from django.contrib.auth.models import User as AuthUser
-                        system_admin = AuthUser.objects.filter(is_superuser=True).order_by('id').first()
-                        
-                        IPBlocklist.objects.create(
-                            ip_address=ip_address,
-                            reason=f"Automatic block: Login attempt from non-allowed country {country_code} ({geo_data.get('country_name')})",
-                            is_active=True,
-                            blocked_by=system_admin
-                        )
-                        blocked_by_username = system_admin.username if system_admin else 'System'
-                        print(f"🚫 IP AUTO-BLOCKED: {ip_address} added to blocklist (Country: {country_code}, Blocked by: {blocked_by_username})")
-                        
-                        # Log the auto-block
-                        SystemLog.objects.create(
-                            log_type='security',
-                            level='critical',
-                            message=f"IP {ip_address} automatically added to blocklist during login (Country: {country_code}, Blocked by: {blocked_by_username})",
-                            user=user,
-                            ip_address=ip_address,
-                            metadata={
-                                'country_code': country_code,
-                                'country_name': geo_data.get('country_name'),
-                                'city': geo_data.get('city'),
-                                'action': 'auto_blocked_on_login',
-                                'blocked_by': blocked_by_username,
-                                'device_id': device.id
-                            }
-                        )
-                    else:
-                        print(f"⚠️  IP already in blocklist: {ip_address}")
+                print(f"✓ EXISTING DEVICE: ID={device.id}, Trusted={device.is_trusted}, Blocked={device.is_blocked}")
+                
+            except Device.DoesNotExist:
+                # Create new device with country-based trust
+                auto_trust = getattr(settings, 'AUTO_TRUST_DEVICES_FROM_ALLOWED_COUNTRIES', True)
+                auto_block = getattr(settings, 'AUTO_BLOCK_DEVICES_FROM_BLOCKED_COUNTRIES', True)
+                
+                initial_trust = is_from_allowed_country and auto_trust
+                initial_block = not is_from_allowed_country and auto_block
+                
+                device = Device.objects.create(
+                    user=user,
+                    fingerprint_hash=fingerprint_hash,
+                    device_fingerprint=fingerprint_hash,
+                    last_ip=ip_address,
+                    last_country_code=country_code,
+                    is_trusted=initial_trust,
+                    is_blocked=initial_block,
+                    status='blocked' if initial_block else 'normal',
+                    risk_score=0 if initial_trust else 70
+                )
+                device_created = True
+                
+                print(f"🆕 NEW DEVICE: ID={device.id}, Country={country_code}, Trusted={initial_trust}, Blocked={initial_block}")
             
-            # Rule 6: Untrusted device (CRITICAL - BLOCKS LOGIN)
-            if not device.is_trusted:
-                should_block = True
-                risk_score += 100
-                risk_reasons.append('Untrusted device - only trusted devices allowed')
-                print(f"🚫 BLOCKED: Device {device.id} is not trusted")
-            
-            # Rule 7: IP change detection
-            if not created and device.last_ip != ip_address:
-                risk_score += 20
-                risk_reasons.append(f'IP changed from {device.last_ip} to {ip_address}')
-                print(f"⚠️  IP changed: {device.last_ip} → {ip_address}")
-            
-            # Determine if suspicious
-            if risk_score >= 40:
-                is_suspicious = True
+            # Calculate device risk score
+            device_risk_score = calculate_device_risk_score(device, country_code)
             
             # ═══════════════════════════════════════════════════════
-            # ALWAYS CREATE LOGIN EVENT (even if blocked)
-            # This allows admins to review and unblock later
+            # CRITICAL DEVICE CHECKS - BLOCK IF FAILED
+            # ═══════════════════════════════════════════════════════
+            should_block = False
+            risk_score = 0
+            risk_reasons = []
+            
+            # Check 1: Device is blocked
+            if device.is_blocked:
+                should_block = True
+                risk_score = 100
+                risk_reasons.append('Device is blocked')
+                print(f"🚫 DEVICE BLOCKED: Device {device.id} is blocked")
+            
+            # Check 2: Device is not trusted (CRITICAL)
+            if not device.is_trusted:
+                should_block = True
+                risk_score = 100
+                risk_reasons.append('Untrusted device - only trusted devices allowed')
+                print(f"🚫 DEVICE NOT TRUSTED: Device {device.id} is not trusted")
+            
+            # Additional risk factors (don't block, just increase score)
+            if device_created:
+                risk_score += 15
+                risk_reasons.append('Login from new device')
+            
+            if check_velocity(user, 'login', 60):
+                risk_score += 25
+                risk_reasons.append('Too many login attempts in short time')
+            
+            country_risk = get_country_risk_level(country_code)
+            if country_risk['level'] != 'low':
+                risk_score += country_risk['score']
+                risk_reasons.append(country_risk['reason'])
+            
+            # Determine if suspicious
+            is_suspicious = risk_score >= 40 or should_block
+            
+            # ═══════════════════════════════════════════════════════
+            # CREATE LOGIN EVENT (always, even if blocked)
             # ═══════════════════════════════════════════════════════
             login_event = LoginEvent.objects.create(
                 user=user,
@@ -884,23 +924,26 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 device=device,
                 status='blocked' if should_block else 'success',
                 ip_address=ip_address,
-                country_code=geo_data.get('country_code', 'Unknown'),
+                country_code=country_code,
                 city=geo_data.get('city', 'Unknown'),
-                is_suspicious=is_suspicious or should_block,
-                risk_score=risk_score,
+                is_suspicious=is_suspicious,
+                risk_score=min(risk_score, 100),
                 risk_reasons=risk_reasons,
                 user_agent=request.META.get('HTTP_USER_AGENT', '')
             )
             
-            print(f"✓ Login event created: ID={login_event.id}, Status={login_event.status}, Risk={risk_score}, Suspicious={is_suspicious}")
+            print(f"✓ Login event created: ID={login_event.id}, Status={login_event.status}, Risk={risk_score}")
             
-            # Block if necessary (AFTER creating all records)
+            # ═══════════════════════════════════════════════════════
+            # BLOCK LOGIN IF DEVICE NOT TRUSTED/BLOCKED
+            # ═══════════════════════════════════════════════════════
             if should_block:
-                print(f"🚫 LOGIN BLOCKED: Risk score {risk_score}")
+                print(f"🚫 LOGIN BLOCKED: {', '.join(risk_reasons)}")
+                
                 SystemLog.objects.create(
                     log_type='security',
                     level='critical',
-                    message=f"Blocked login attempt for {user.username} from {ip_address} ({geo_data.get('city')}, {country_code})",
+                    message=f"Blocked login for {user.username} from {ip_address} ({country_code})",
                     user=user,
                     ip_address=ip_address,
                     metadata={
@@ -908,59 +951,63 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                         'risk_reasons': risk_reasons,
                         'device_id': device.id,
                         'login_event_id': login_event.id,
-                        'country_code': country_code,
-                        'country_name': geo_data.get('country_name')
+                        'country_code': country_code
                     }
                 )
+                
                 raise serializers.ValidationError({
                     'error': 'Login blocked due to security concerns',
-                    'message': 'Your login attempt has been blocked. All details have been recorded.',
+                    'message': 'Your device is not trusted. Only trusted devices from allowed countries can login.',
                     'risk_score': risk_score,
                     'reasons': risk_reasons,
                     'device_id': device.id,
+                    'device_trusted': device.is_trusted,
+                    'device_blocked': device.is_blocked,
                     'login_event_id': login_event.id,
                     'country_detected': geo_data.get('country_name', 'Unknown'),
                     'country_code': country_code,
-                    'contact': 'Please contact support if you believe this is an error.'
+                    'contact': 'Please contact support to verify your device.'
                 })
             
-            # Create system log
+            # ═══════════════════════════════════════════════════════
+            # SUCCESS: Create system log and add info to response
+            # ═══════════════════════════════════════════════════════
             SystemLog.objects.create(
                 log_type='login',
                 level='warning' if is_suspicious else 'info',
-                message=f"User {user.username} logged in from {ip_address} ({geo_data.get('city')}, {geo_data.get('country_code')})",
+                message=f"User {user.username} logged in from {ip_address} ({country_code})",
                 user=user,
                 ip_address=ip_address,
                 metadata={
                     'risk_score': risk_score,
                     'risk_reasons': risk_reasons,
                     'device_id': device.id,
-                    'is_new_device': created
+                    'is_new_device': device_created
                 }
             )
+            
+            print(f"✓ LOGIN SUCCESS: User={user.username}, Device={device.id}, Risk={risk_score}")
             
             # Add device and location info to response
             data['device_id'] = device.id
             data['device_trusted'] = device.is_trusted
-            data['device_new'] = created
+            data['device_new'] = device_created
             data['security'] = {
-                'risk_score': risk_score,
+                'risk_score': min(risk_score, 100),
                 'risk_level': 'high' if risk_score >= 70 else 'medium' if risk_score >= 40 else 'low',
                 'is_suspicious': is_suspicious,
-                'requires_verification': is_suspicious and not device.is_trusted,
+                'requires_verification': is_suspicious,
             }
             data['login_info'] = {
                 'ip_address': ip_address,
                 'country': geo_data.get('country_name', 'Unknown'),
-                'country_code': geo_data.get('country_code', 'Unknown'),
+                'country_code': country_code,
                 'city': geo_data.get('city', 'Unknown'),
                 'region': geo_data.get('region', 'Unknown'),
             }
             
-            # Warning message if suspicious
             if is_suspicious:
                 data['warning'] = 'This login appears suspicious. Additional verification may be required.'
-                print(f"⚠️  SUSPICIOUS LOGIN: {', '.join(risk_reasons)}")
         
         # Add user info to response
         data['user'] = {

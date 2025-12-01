@@ -190,19 +190,16 @@ class IPBlocklistMiddleware(MiddlewareMixin):
     2. Block request immediately if IP is blacklisted
     3. No authentication needed - security first!
     
-    BYPASS: Superusers (staff) are never blocked
+    BYPASS: Superusers are never blocked (but only AFTER they're authenticated)
     """
     
     def process_request(self, request):
-        # Skip for authentication endpoints
-        # IMPORTANT: Allow login page access so admins can login to unblock IPs
-        if (request.path.startswith('/admin/') or 
-            request.path.startswith('/static/') or
-            request.path.startswith('/media/') or
-            request.path.startswith('/api/auth/')):  # Allow all auth endpoints
+        # Skip for static files and admin static assets
+        if (request.path.startswith('/static/') or 
+            request.path.startswith('/media/')):
             return None
         
-        # BYPASS: Allow ONLY superusers unrestricted access (not regular staff)
+        # BYPASS: Allow ONLY superusers unrestricted access (but only if already authenticated)
         # Check if user is authenticated (user attribute may not exist yet)
         if hasattr(request, 'user') and request.user.is_authenticated and request.user.is_superuser:
             print(f"✓ IP blocklist bypassed: Superuser {request.user.username}")
@@ -218,6 +215,8 @@ class IPBlocklistMiddleware(MiddlewareMixin):
         ).exists()
         
         if is_blocked:
+            print(f"🚫 IP BLOCKED: {ip_address} attempted to access {request.path}")
+            
             # Return 403 Forbidden immediately
             return JsonResponse(
                 {
@@ -235,21 +234,17 @@ class IPBlocklistMiddleware(MiddlewareMixin):
 
 class DeviceFingerprintMiddleware(MiddlewareMixin):
     """
-    Device Fingerprint Tracking with Country-Based Trust - Runs AFTER authentication
+    Device Fingerprint Tracking - Runs AFTER authentication
     
     Purpose:
     1. Extract device fingerprint from request
-    2. Check if device exists in database
-    3. Create new device with country-based trust:
-       - From ALLOWED_COUNTRIES → is_trusted = True
-       - From other countries → is_blocked = True
-    4. Block login if device is blocked
-    5. Attach device object to request
+    2. Attach device info to request for authenticated users
+    3. Track device usage
     
-    BYPASS: Superusers (staff) are never blocked and always trusted
+    BYPASS: Superusers always have trusted devices
     
-    NOTE: This middleware does NOT block - it only tracks devices.
-    Blocking is handled in the login view after all records are created.
+    NOTE: This middleware ONLY tracks - does NOT block.
+    Blocking happens in authentication layer BEFORE user is authenticated.
     """
     
     def process_request(self, request):
@@ -259,7 +254,7 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
         
         # Only track devices for authenticated users
         if request.user.is_authenticated:
-            # BYPASS: ONLY superusers always have trusted devices (not regular staff)
+            # BYPASS: ONLY superusers always have trusted devices
             if request.user.is_superuser:
                 print(f"✓ Device check bypassed: Superuser {request.user.username}")
                 # Create a virtual trusted device for superusers
@@ -276,74 +271,32 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
             fingerprint_hash = calculate_device_fingerprint(request)
             request.device_fingerprint = fingerprint_hash
             
-            # Get geolocation to determine country
+            # Get geolocation
             geo_data = get_geo_location(ip_address)
             country_code = geo_data.get('country_code', 'Unknown')
             
-            # Get allowed countries from settings
-            allowed_countries = getattr(settings, 'ALLOWED_COUNTRIES', ['SA'])
-            
-            # Determine if device should be trusted or blocked based on country
-            is_from_allowed_country = country_code in allowed_countries
-            
-            # Calculate initial risk score
-            from .utils import calculate_device_risk_score
-            
-            # Get or create device
-            device, created = Device.objects.get_or_create(
-                user=request.user,
-                fingerprint_hash=fingerprint_hash,
-                defaults={
-                    'last_ip': ip_address,
-                    'device_fingerprint': fingerprint_hash,
-                    'is_trusted': is_from_allowed_country,  # Auto-trust if from allowed country
-                    'is_blocked': not is_from_allowed_country,  # Auto-block if not from allowed country
-                    'status': 'normal' if is_from_allowed_country else 'blocked',
-                    'last_country_code': country_code,
-                    'risk_score': 0 if is_from_allowed_country else 70  # Initial risk score
-                }
-            )
-            
-            # Calculate and update device risk score
-            device_risk_score = calculate_device_risk_score(device, country_code)
-            if device.risk_score != device_risk_score:
-                device.risk_score = device_risk_score
-                device.save(update_fields=['risk_score'])
-            
-            # Log device creation/detection
-            if created:
-                if is_from_allowed_country:
-                    print(f"✓ NEW DEVICE TRUSTED: User={request.user.username}, Country={country_code}, Device={device.id}, Risk={device_risk_score}")
-                else:
-                    print(f"🚫 NEW DEVICE BLOCKED: User={request.user.username}, Country={country_code}, Device={device.id}, Risk={device_risk_score}")
-                
-                # Log to system
-                from .models import SystemLog
-                SystemLog.objects.create(
-                    log_type='security',
-                    level='info' if is_from_allowed_country else 'warning',
-                    message=f"New device {'trusted' if is_from_allowed_country else 'blocked'} for {request.user.username} from {country_code}",
+            # Try to get existing device
+            try:
+                device = Device.objects.get(
                     user=request.user,
-                    ip_address=ip_address,
-                    metadata={
-                        'device_id': device.id,
-                        'country_code': country_code,
-                        'is_trusted': device.is_trusted,
-                        'is_blocked': device.is_blocked,
-                        'risk_score': device_risk_score
-                    }
+                    fingerprint_hash=fingerprint_hash
                 )
-            else:
-                print(f"✓ EXISTING DEVICE: User={request.user.username}, Device={device.id}, Risk={device_risk_score}, Trusted={device.is_trusted}, Blocked={device.is_blocked}")
-            
-            # Update existing device
-            if not created:
+                
+                # Update last seen
                 device.last_seen_at = timezone.now()
                 device.last_ip = ip_address
                 device.last_country_code = country_code
                 device.save(update_fields=['last_seen_at', 'last_ip', 'last_country_code'])
+                
+                print(f"✓ EXISTING DEVICE: User={request.user.username}, Device={device.id}, Trusted={device.is_trusted}, Blocked={device.is_blocked}")
+                
+            except Device.DoesNotExist:
+                # Device will be created during login - this shouldn't happen
+                # but handle gracefully
+                device = None
+                print(f"⚠️  Device not found for authenticated user {request.user.username}")
             
-            # Attach device to request (even if blocked - let login view handle blocking)
+            # Attach device to request
             request.device = device
         else:
             # Anonymous user
