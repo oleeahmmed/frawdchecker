@@ -368,3 +368,78 @@ def calculate_login_risk(request, user=None):
         'is_suspicious': risk_score >= 30,
         'geo': geo
     }
+
+
+def calculate_device_risk_score(device, country_code='Unknown'):
+    """
+    Calculate risk score for a device based on various factors
+    
+    Risk Score: 0-100
+    - 0-20: Low risk (trusted)
+    - 21-50: Medium risk (suspicious)
+    - 51-100: High risk (blocked)
+    
+    Args:
+        device: Device object
+        country_code: Country code from geolocation
+    
+    Returns:
+        int: Risk score (0-100)
+    """
+    from django.conf import settings
+    
+    risk_score = 0
+    
+    # Factor 1: Device blocked status (Critical)
+    if device.is_blocked:
+        risk_score += 100
+        return min(risk_score, 100)  # Max 100
+    
+    # Factor 2: Device not trusted
+    if not device.is_trusted:
+        risk_score += 30
+    
+    # Factor 3: Country risk
+    allowed_countries = getattr(settings, 'ALLOWED_COUNTRIES', ['SA'])
+    if country_code not in allowed_countries:
+        risk_score += 40
+    
+    # Factor 4: Device status
+    if device.status == 'blocked':
+        risk_score += 50
+    elif device.status == 'suspicious':
+        risk_score += 20
+    
+    # Factor 5: New device (less than 24 hours old)
+    from django.utils import timezone
+    from datetime import timedelta
+    
+    if device.first_seen_at:
+        device_age = timezone.now() - device.first_seen_at
+        if device_age < timedelta(hours=24):
+            risk_score += 10
+        elif device_age < timedelta(days=7):
+            risk_score += 5
+    
+    # Factor 6: IP changes frequently
+    # (This would require tracking IP history - simplified for now)
+    
+    return min(risk_score, 100)  # Cap at 100
+
+
+def get_device_risk_level(risk_score):
+    """
+    Convert risk score to risk level
+    
+    Args:
+        risk_score: int (0-100)
+    
+    Returns:
+        str: 'low', 'medium', or 'high'
+    """
+    if risk_score >= 51:
+        return 'high'
+    elif risk_score >= 21:
+        return 'medium'
+    else:
+        return 'low'

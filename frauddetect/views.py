@@ -651,9 +651,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             print(f"🔍 Login attempt - User: {user.username}, IP: {ip_address}")
             
             # ═══════════════════════════════════════════════════════
-            # BYPASS: Superusers skip all fraud detection
+            # BYPASS: ONLY superusers skip all fraud detection (not regular staff)
             # ═══════════════════════════════════════════════════════
-            if user.is_staff:
+            if user.is_superuser:
                 print(f"✓ SUPERUSER LOGIN: Bypassing all fraud detection for {user.username}")
                 
                 # Create minimal login event for superuser

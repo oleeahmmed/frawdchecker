@@ -31,9 +31,9 @@ class GeoRestrictionMiddleware(MiddlewareMixin):
         if request.path.startswith('/admin/') or request.path.startswith('/static/'):
             return None
         
-        # BYPASS: Allow superusers/staff unrestricted access
+        # BYPASS: Allow ONLY superusers unrestricted access (not regular staff)
         # Check if user is authenticated (user attribute may not exist yet)
-        if hasattr(request, 'user') and request.user.is_authenticated and request.user.is_staff:
+        if hasattr(request, 'user') and request.user.is_authenticated and request.user.is_superuser:
             print(f"✓ Geo-restriction bypassed: Superuser {request.user.username}")
             return None
         
@@ -145,9 +145,9 @@ class IPBlocklistMiddleware(MiddlewareMixin):
     """
     
     def process_request(self, request):
-        # BYPASS: Allow superusers/staff unrestricted access
+        # BYPASS: Allow ONLY superusers unrestricted access (not regular staff)
         # Check if user is authenticated (user attribute may not exist yet)
-        if hasattr(request, 'user') and request.user.is_authenticated and request.user.is_staff:
+        if hasattr(request, 'user') and request.user.is_authenticated and request.user.is_superuser:
             print(f"✓ IP blocklist bypassed: Superuser {request.user.username}")
             return None
         
@@ -199,8 +199,8 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
         
         # Only track devices for authenticated users
         if request.user.is_authenticated:
-            # BYPASS: Superusers/staff always have trusted devices
-            if request.user.is_staff:
+            # BYPASS: ONLY superusers always have trusted devices (not regular staff)
+            if request.user.is_superuser:
                 print(f"✓ Device check bypassed: Superuser {request.user.username}")
                 # Create a virtual trusted device for superusers
                 request.device = type('obj', (object,), {
@@ -225,6 +225,9 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
             # Determine if device should be trusted or blocked based on country
             is_from_allowed_country = country_code in allowed_countries
             
+            # Calculate initial risk score
+            from .utils import calculate_device_risk_score
+            
             # Get or create device
             device, created = Device.objects.get_or_create(
                 user=request.user,
@@ -234,16 +237,24 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
                     'device_fingerprint': fingerprint_hash,
                     'is_trusted': is_from_allowed_country,  # Auto-trust if from allowed country
                     'is_blocked': not is_from_allowed_country,  # Auto-block if not from allowed country
-                    'status': 'normal' if is_from_allowed_country else 'blocked'
+                    'status': 'normal' if is_from_allowed_country else 'blocked',
+                    'last_country_code': country_code,
+                    'risk_score': 0 if is_from_allowed_country else 70  # Initial risk score
                 }
             )
+            
+            # Calculate and update device risk score
+            device_risk_score = calculate_device_risk_score(device, country_code)
+            if device.risk_score != device_risk_score:
+                device.risk_score = device_risk_score
+                device.save(update_fields=['risk_score'])
             
             # Log device creation/detection
             if created:
                 if is_from_allowed_country:
-                    print(f"✓ NEW DEVICE TRUSTED: User={request.user.username}, Country={country_code}, Device={device.id}")
+                    print(f"✓ NEW DEVICE TRUSTED: User={request.user.username}, Country={country_code}, Device={device.id}, Risk={device_risk_score}")
                 else:
-                    print(f"🚫 NEW DEVICE BLOCKED: User={request.user.username}, Country={country_code}, Device={device.id}")
+                    print(f"🚫 NEW DEVICE BLOCKED: User={request.user.username}, Country={country_code}, Device={device.id}, Risk={device_risk_score}")
                 
                 # Log to system
                 from .models import SystemLog
@@ -257,16 +268,20 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
                         'device_id': device.id,
                         'country_code': country_code,
                         'is_trusted': device.is_trusted,
-                        'is_blocked': device.is_blocked
+                        'is_blocked': device.is_blocked,
+                        'risk_score': device_risk_score
                     }
                 )
+            else:
+                print(f"✓ EXISTING DEVICE: User={request.user.username}, Device={device.id}, Risk={device_risk_score}, Trusted={device.is_trusted}")
             
             # CRITICAL: Check if device is blocked - BLOCK LOGIN
             if device.is_blocked:
-                print(f"🚫 LOGIN BLOCKED: Device {device.id} is blocked for user {request.user.username}")
+                print(f"🚫 LOGIN BLOCKED: Device {device.id} is blocked for user {request.user.username}, Risk Score={device_risk_score}")
                 
                 # Log the blocked attempt
                 from .models import SystemLog
+                from .utils import get_device_risk_level
                 SystemLog.objects.create(
                     log_type='security',
                     level='critical',
@@ -276,6 +291,8 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
                     metadata={
                         'device_id': device.id,
                         'country_code': country_code,
+                        'risk_score': device_risk_score,
+                        'risk_level': get_device_risk_level(device_risk_score),
                         'reason': 'Device is blocked (not from allowed country)'
                     }
                 )
@@ -286,6 +303,8 @@ class DeviceFingerprintMiddleware(MiddlewareMixin):
                         'message': 'This device has been blocked because it is not from an allowed country.',
                         'details': 'Access is restricted to Saudi Arabia only.',
                         'device_id': device.id,
+                        'device_risk_score': device_risk_score,
+                        'device_risk_level': get_device_risk_level(device_risk_score),
                         'country_detected': geo_data.get('country_name', 'Unknown'),
                         'country_code': country_code,
                         'contact': 'Please contact support if you believe this is an error.'
