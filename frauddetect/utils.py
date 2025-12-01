@@ -25,13 +25,36 @@ def get_client_ip(request):
     Request থেকে সঠিক Client IP Address বের করে
     Proxy/Load Balancer এর পেছনে থাকলেও কাজ করে
     """
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        # Multiple proxies থাকলে প্রথমটি হলো actual client IP
-        ip = x_forwarded_for.split(',')[0].strip()
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip
+    # Try different headers in order of preference
+    headers_to_check = [
+        'HTTP_X_FORWARDED_FOR',
+        'HTTP_X_REAL_IP',
+        'HTTP_CF_CONNECTING_IP',  # Cloudflare
+        'HTTP_X_FORWARDED',
+        'HTTP_FORWARDED_FOR',
+        'HTTP_FORWARDED',
+        'REMOTE_ADDR',
+    ]
+    
+    for header in headers_to_check:
+        ip = request.META.get(header)
+        if ip:
+            # If multiple IPs (proxy chain), take the first one
+            if ',' in ip:
+                ip = ip.split(',')[0].strip()
+            
+            # Clean up the IP
+            ip = ip.strip()
+            
+            # Skip private/local IPs if we have other options
+            if not ip.startswith(('127.', '10.', '172.', '192.168.', 'localhost', '::1')):
+                return ip
+            elif header == 'REMOTE_ADDR':
+                # If it's the last option, return it anyway
+                return ip
+    
+    # Fallback
+    return request.META.get('REMOTE_ADDR', '127.0.0.1')
 
 
 def get_country_risk_level(country_code):
@@ -75,30 +98,107 @@ def get_country_risk_level(country_code):
 def get_geo_location(ip_address):
     """
     IP Address থেকে Geographic Location বের করে
-    Free API ব্যবহার করে (ipapi.co)
+    Multiple free APIs with fallback support
     """
-    try:
-        response = requests.get(
-            f'https://ipapi.co/{ip_address}/json/', 
-            timeout=3
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                'country_code': data.get('country_code', 'SA'),
+    # Skip geolocation for local/private IPs
+    if not ip_address or ip_address.startswith(('127.', '10.', '172.', '192.168.', 'localhost', '::1')):
+        return {
+            'country_code': 'LOCAL',
+            'country_name': 'Local Network',
+            'city': 'Local',
+            'region': 'Local',
+            'latitude': None,
+            'longitude': None,
+            'timezone': None,
+        }
+    
+    # Try multiple geolocation services
+    apis = [
+        {
+            'name': 'ipapi.co',
+            'url': f'https://ipapi.co/{ip_address}/json/',
+            'parser': lambda data: {
+                'country_code': data.get('country_code', 'Unknown'),
+                'country_name': data.get('country_name', 'Unknown'),
                 'city': data.get('city', 'Unknown'),
+                'region': data.get('region', 'Unknown'),
                 'latitude': data.get('latitude'),
                 'longitude': data.get('longitude'),
+                'timezone': data.get('timezone'),
             }
-    except Exception as e:
-        print(f"Geo location error: {e}")
+        },
+        {
+            'name': 'ip-api.com',
+            'url': f'http://ip-api.com/json/{ip_address}',
+            'parser': lambda data: {
+                'country_code': data.get('countryCode', 'Unknown'),
+                'country_name': data.get('country', 'Unknown'),
+                'city': data.get('city', 'Unknown'),
+                'region': data.get('regionName', 'Unknown'),
+                'latitude': data.get('lat'),
+                'longitude': data.get('lon'),
+                'timezone': data.get('timezone'),
+            }
+        },
+        {
+            'name': 'ipwhois.app',
+            'url': f'https://ipwhois.app/json/{ip_address}',
+            'parser': lambda data: {
+                'country_code': data.get('country_code', 'Unknown'),
+                'country_name': data.get('country', 'Unknown'),
+                'city': data.get('city', 'Unknown'),
+                'region': data.get('region', 'Unknown'),
+                'latitude': data.get('latitude'),
+                'longitude': data.get('longitude'),
+                'timezone': data.get('timezone'),
+            }
+        },
+    ]
     
-    # Default return যদি API কাজ না করে
+    # Try each API in order
+    for api in apis:
+        try:
+            response = requests.get(
+                api['url'],
+                timeout=5,
+                headers={'User-Agent': 'Mozilla/5.0 (Fraud Detection System)'}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Check if API returned error
+                if 'error' in data or data.get('status') == 'fail':
+                    continue
+                
+                # Parse the response
+                result = api['parser'](data)
+                
+                # Validate we got useful data
+                if result['country_code'] and result['country_code'] != 'Unknown':
+                    print(f"✓ Geolocation from {api['name']}: {result['country_code']} - {result['city']}")
+                    return result
+                    
+        except requests.exceptions.Timeout:
+            print(f"✗ {api['name']} timeout")
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f"✗ {api['name']} error: {e}")
+            continue
+        except Exception as e:
+            print(f"✗ {api['name']} parsing error: {e}")
+            continue
+    
+    # All APIs failed - return default
+    print(f"⚠ All geolocation APIs failed for IP: {ip_address}")
     return {
-        'country_code': 'SA', 
+        'country_code': 'Unknown',
+        'country_name': 'Unknown',
         'city': 'Unknown',
+        'region': 'Unknown',
         'latitude': None,
-        'longitude': None
+        'longitude': None,
+        'timezone': None,
     }
 
 

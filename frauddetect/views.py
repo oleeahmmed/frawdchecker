@@ -588,7 +588,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             
             fingerprint_hash = calculate_device_fingerprint(request)
             ip_address = get_client_ip(request)
+            
+            # Log IP detection
+            print(f"🔍 Login attempt - User: {user.username}, IP: {ip_address}")
+            
+            # Get geolocation
             geo_data = get_geo_location(ip_address)
+            print(f"📍 Location: {geo_data.get('country_name', 'Unknown')} ({geo_data.get('country_code', 'Unknown')}) - {geo_data.get('city', 'Unknown')}")
             
             # Get or create device
             device, created = Device.objects.get_or_create(
@@ -605,20 +611,32 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 device.last_ip = ip_address
                 device.save(update_fields=['last_seen_at', 'last_ip'])
             
-            # Create login event
-            LoginEvent.objects.create(
+            # Create login event with detailed location
+            login_event = LoginEvent.objects.create(
                 user=user,
+                username=user.username,
                 device=device,
+                status='success',
                 ip_address=ip_address,
-                country=geo_data.get('country_code', 'Unknown'),
+                country_code=geo_data.get('country_code', 'Unknown'),
                 city=geo_data.get('city', 'Unknown'),
-                is_successful=True,
-                is_suspicious=False
+                is_suspicious=False,
+                risk_score=0,
+                user_agent=request.META.get('HTTP_USER_AGENT', '')
             )
             
-            # Add device info to response
+            print(f"✓ Login event created: ID={login_event.id}, Country={login_event.country}, City={login_event.city}")
+            
+            # Add device and location info to response
             data['device_id'] = device.id
             data['device_trusted'] = device.is_trusted
+            data['login_info'] = {
+                'ip_address': ip_address,
+                'country': geo_data.get('country_name', 'Unknown'),
+                'country_code': geo_data.get('country_code', 'Unknown'),
+                'city': geo_data.get('city', 'Unknown'),
+                'region': geo_data.get('region', 'Unknown'),
+            }
         
         # Add user info to response
         data['user'] = {
