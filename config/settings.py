@@ -22,6 +22,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-4x)djnt-g2pl&*#4i$1zh8*%vfy=3%@+48xc^npm*%4i66gin!'
 
+# IP Whitelist Management Secret Key
+# This key is required to add/remove IPs from whitelist via API
+IP_WHITELIST_SECRET_KEY = 'your-super-secret-whitelist-key-change-this-in-production'
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
@@ -40,17 +44,10 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'django.contrib.sites',  # Required for allauth
 
     # Third Party Apps
     'rest_framework',
-    'rest_framework.authtoken',  # For token authentication
     'rest_framework_simplejwt',  # JWT Authentication
-    'dj_rest_auth',  # REST Auth
-    'dj_rest_auth.registration',  # Registration
-    'allauth',  # Django Allauth
-    'allauth.account',  # Allauth Account
-    'allauth.socialaccount',  # Social Account (optional)
     'corsheaders',
     'drf_spectacular',  # API Documentation
     
@@ -58,23 +55,17 @@ INSTALLED_APPS = [
     'frauddetect',
 ]
 
-SITE_ID = 1
-
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # WhiteNoise for static files
-    'frauddetect.middleware.GeoRestrictionMiddleware',  # Geo-restriction (KSA compliance) - FIRST
-    'frauddetect.middleware.IPBlocklistMiddleware',  # IP Block Check (BEFORE auth)
+    'frauddetect.login_middleware.LoginSecurityMiddleware',  # 🛡️ Login Security
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'allauth.account.middleware.AccountMiddleware',  # Required for allauth
-    'frauddetect.middleware.DeviceFingerprintMiddleware',  # Device tracking (AFTER auth)
 ]
-
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
@@ -438,27 +429,7 @@ SIMPLE_JWT = {
 }
 
 # ============================================
-# DJ-REST-AUTH CONFIGURATION
+# AUTHENTICATION CONFIGURATION
 # ============================================
-REST_AUTH = {
-    'USE_JWT': True,
-    'JWT_AUTH_COOKIE': 'fraud-auth',
-    'JWT_AUTH_REFRESH_COOKIE': 'fraud-refresh-token',
-    'JWT_AUTH_HTTPONLY': False,
-    'USER_DETAILS_SERIALIZER': 'frauddetect.serializers.UserDetailsSerializer',
-    'LOGIN_SERIALIZER': 'frauddetect.serializers.CustomLoginSerializer',
-    'REGISTER_SERIALIZER': 'frauddetect.serializers.CustomRegisterSerializer',
-}
-
-# ============================================
-# DJANGO ALLAUTH CONFIGURATION
-# ============================================
-ACCOUNT_LOGIN_METHODS = {'username', 'email'}  # Allow both username and email
-ACCOUNT_EMAIL_VERIFICATION = 'optional'
-ACCOUNT_SIGNUP_FIELDS = [
-    'email*',      # Required
-    'username*',   # Required
-    'password1*',  # Required
-    'password2*',  # Required
-]
-ACCOUNT_USER_MODEL_USERNAME_FIELD = 'username'
+# Using custom JWT authentication with fraud detection
+# No allauth or dj-rest-auth needed

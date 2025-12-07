@@ -11,11 +11,7 @@ from drf_spectacular.views import (
 urlpatterns = [
     path('admin/', admin.site.urls),
     
-    # Authentication APIs
-    path('api/auth/', include('dj_rest_auth.urls')),
-    path('api/auth/registration/', include('dj_rest_auth.registration.urls')),
-    
-    # Fraud Detection APIs
+    # Fraud Detection APIs (Custom JWT authentication with fraud detection)
     path('api/', include('frauddetect.urls')),
     
     # DRF Browsable API Auth

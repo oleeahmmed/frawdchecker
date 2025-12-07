@@ -1,23 +1,48 @@
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
-from . import views
+"""
+🔗 URLs Configuration - Authentication & Transactions
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# Router তৈরি
-router = DefaultRouter()
-router.register(r'devices', views.DeviceViewSet, basename='device')
-router.register(r'login-events', views.LoginEventViewSet, basename='loginevent')
-router.register(r'transactions', views.TransactionViewSet, basename='transaction')
-router.register(r'fraud-events', views.FraudEventViewSet, basename='fraudevent')
-router.register(r'risk-profiles', views.RiskProfileViewSet, basename='riskprofile')
-router.register(r'system-logs', views.SystemLogViewSet, basename='systemlog')
-router.register(r'ip-blocklist', views.IPBlocklistViewSet, basename='ipblocklist')
+Authentication এবং Transaction endpoints।
+"""
+
+from django.urls import path
+from .views import LoginView, CustomTokenRefreshView, CurrentUserView
+from .transaction_views import (
+    TransactionCreateView,
+    TransactionListView,
+    TransactionDetailView,
+    TransactionStatsView
+)
+
+app_name = 'frauddetect'
 
 urlpatterns = [
-    # Custom JWT Authentication with Device Tracking
-    path('auth/login/', views.CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('auth/token/refresh/', views.CustomTokenRefreshView.as_view(), name='token_refresh'),
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 🔐 AUTHENTICATION ENDPOINTS
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
-    # API Endpoints
-    path('', include(router.urls)),
-    path('dashboard/', views.DashboardView.as_view(), name='dashboard'),
+    # Login - Get JWT tokens (username OR email)
+    path('auth/login/', LoginView.as_view(), name='login'),
+    
+    # Refresh token - Get new access token
+    path('auth/token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
+    
+    # Current user info
+    path('auth/me/', CurrentUserView.as_view(), name='current_user'),
+    
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 💰 TRANSACTION ENDPOINTS
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    # Create transaction with fraud detection
+    path('transactions/create/', TransactionCreateView.as_view(), name='transaction_create'),
+    
+    # List user transactions
+    path('transactions/', TransactionListView.as_view(), name='transaction_list'),
+    
+    # Transaction details
+    path('transactions/<int:transaction_id>/', TransactionDetailView.as_view(), name='transaction_detail'),
+    
+    # Transaction statistics
+    path('transactions/stats/', TransactionStatsView.as_view(), name='transaction_stats'),
 ]
