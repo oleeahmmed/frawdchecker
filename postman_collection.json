@@ -1,27 +1,30 @@
 {
   "info": {
     "name": "🛡️ Fraud Detection API - Complete Test Suite",
-    "description": "Complete API testing collection for Fraud Detection System with all login and transaction fraud detection scenarios.",
+    "description": "Complete API testing collection for Fraud Detection System with all login and transaction fraud detection scenarios.\n\nUsers:\n- Admin: olee (superuser - bypasses all checks)\n- Normal: adil, ashik",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {"key": "base_url", "value": "http://localhost:8000"},
     {"key": "admin_token", "value": ""},
     {"key": "adil_token", "value": ""},
-    {"key": "ashik_token", "value": ""}
+    {"key": "ashik_token", "value": ""},
+    {"key": "refresh_token", "value": ""}
   ],
   "item": [
     {
-      "name": "🔐 1. Authentication Tests",
+      "name": "🔐 1. LOGIN TESTS",
+      "description": "All login fraud detection scenarios",
       "item": [
         {
-          "name": "1.1 ✅ Admin Login (Superuser - Bypass All)",
-          "event": [{"listen": "test", "script": {"exec": ["var jsonData = pm.response.json();", "if(jsonData.access) { pm.collectionVariables.set('admin_token', jsonData.access); }", "pm.test('Admin login successful', function() { pm.response.to.have.status(200); });"]}}],
+          "name": "1.1 ✅ Admin Login (Superuser Bypass)",
+          "event": [{"listen": "test", "script": {"exec": ["var jsonData = pm.response.json();", "if(jsonData.access) { pm.collectionVariables.set('admin_token', jsonData.access); pm.collectionVariables.set('refresh_token', jsonData.refresh); }", "pm.test('Admin login successful', function() { pm.response.to.have.status(200); });", "pm.test('Has superuser flag', function() { pm.expect(jsonData.user.is_superuser).to.be.true; });"]}}],
           "request": {
             "method": "POST",
             "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\"username\": \"olee\", \"password\": \"501302aA\"}"},
-            "url": "{{base_url}}/api/auth/login/"
+            "body": {"mode": "raw", "raw": "{\n  \"username\": \"olee\",\n  \"password\": \"501302aA\"\n}"},
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Superuser login - bypasses ALL fraud checks including country restriction"
           }
         },
         {
@@ -30,7 +33,7 @@
           "request": {
             "method": "POST",
             "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\"username\": \"adil\", \"password\": \"501302aA\"}"},
+            "body": {"mode": "raw", "raw": "{\n  \"username\": \"adil\",\n  \"password\": \"501302aA\"\n}"},
             "url": "{{base_url}}/api/auth/login/"
           }
         },
@@ -40,7 +43,7 @@
           "request": {
             "method": "POST",
             "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\"username\": \"ashik\", \"password\": \"501302aA\"}"},
+            "body": {"mode": "raw", "raw": "{\n  \"username\": \"ashik\",\n  \"password\": \"501302aA\"\n}"},
             "url": "{{base_url}}/api/auth/login/"
           }
         },
@@ -49,8 +52,9 @@
           "request": {
             "method": "POST",
             "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\"email\": \"adil@example.com\", \"password\": \"501302aA\"}"},
-            "url": "{{base_url}}/api/auth/login/"
+            "body": {"mode": "raw", "raw": "{\n  \"email\": \"adil@example.com\",\n  \"password\": \"501302aA\"\n}"},
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Login using email instead of username"
           }
         },
         {
@@ -58,8 +62,396 @@
           "request": {
             "method": "POST",
             "header": [{"key": "Content-Type", "value": "application/json"}],
-            "body": {"mode": "raw", "raw": "{\"username_or_email\": \"ashik\", \"password\": \"501302aA\"}"},
-            "url": "{{base_url}}/api/auth/login/"
+            "body": {"mode": "raw", "raw": "{\n  \"username_or_email\": \"ashik@example.com\",\n  \"password\": \"501302aA\"\n}"},
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Auto-detect if input is username or email"
+          }
+        },
+        {
+          "name": "1.6 ❌ Invalid Credentials",
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Should return 400', function() { pm.response.to.have.status(400); });"]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"username\": \"adil\",\n  \"password\": \"wrongpassword\"\n}"},
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Test invalid password - should fail"
+          }
+        },
+        {
+          "name": "1.7 ❌ Non-existent User",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"username\": \"nonexistent_user\",\n  \"password\": \"501302aA\"\n}"},
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Test non-existent user - should fail"
+          }
+        },
+        {
+          "name": "1.8 🔄 Token Refresh",
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('Token refreshed', function() { pm.response.to.have.status(200); });"]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"},
+            "url": "{{base_url}}/api/auth/token/refresh/",
+            "description": "Refresh access token using refresh token"
+          }
+        },
+        {
+          "name": "1.9 👤 Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{admin_token}}"}],
+            "url": "{{base_url}}/api/auth/me/",
+            "description": "Get current authenticated user info"
+          }
+        }
+      ]
+    },
+    {
+      "name": "💰 2. TRANSACTION TESTS - Normal",
+      "description": "Normal transaction scenarios",
+      "item": [
+        {
+          "name": "2.1 ✅ Small Transfer (Safe)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 5000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Ahmed Mohammed\",\n  \"transaction_type\": \"transfer\",\n  \"description\": \"Small transfer test\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "Small amount transfer - should be SAFE (risk < 20)"
+          }
+        },
+        {
+          "name": "2.2 ✅ Medium Transfer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 50000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Company XYZ\",\n  \"transaction_type\": \"transfer\",\n  \"description\": \"Medium transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        },
+        {
+          "name": "2.3 ✅ Bill Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{ashik_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 2500,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"STC Telecom\",\n  \"transaction_type\": \"bill_payment\",\n  \"description\": \"Monthly phone bill\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        },
+        {
+          "name": "2.4 ✅ P2P Transfer (Low Amount)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 1000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Friend Ali\",\n  \"transaction_type\": \"p2p\",\n  \"description\": \"Personal transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "⚠️ 3. TRANSACTION TESTS - Risk Triggers",
+      "description": "Transactions that trigger fraud detection",
+      "item": [
+        {
+          "name": "3.1 🟡 High Amount (>100K threshold)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 150000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Large Corp\",\n  \"transaction_type\": \"transfer\",\n  \"description\": \"High amount - triggers threshold check (+30 risk)\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "Amount > 100,000 SAR triggers high_amount_threshold (+30 risk)"
+          }
+        },
+        {
+          "name": "3.2 🟠 International Transfer (+35 risk)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 25000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"John Smith - US Bank\",\n  \"transaction_type\": \"international\",\n  \"description\": \"International wire transfer (+35 risk)\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "International transfers add +35 risk points"
+          }
+        },
+        {
+          "name": "3.3 🟠 Crypto Transaction (+40 risk)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 10000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Binance Wallet\",\n  \"transaction_type\": \"crypto\",\n  \"description\": \"Cryptocurrency purchase (+40 risk)\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "Crypto transactions add +40 risk points"
+          }
+        },
+        {
+          "name": "3.4 🟡 P2P High Value (>100K)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{ashik_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 120000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Private Person\",\n  \"transaction_type\": \"p2p\",\n  \"description\": \"High value P2P (+30 risk for P2P >100K)\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "P2P transfers > 100K add +30 risk points"
+          }
+        },
+        {
+          "name": "3.5 🔴 Combined High Risk",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 200000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Overseas Crypto Exchange\",\n  \"transaction_type\": \"crypto\",\n  \"description\": \"High amount + Crypto = Very High Risk\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "High amount (150K+) + Crypto type = Combined high risk (may be blocked)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "🚫 4. TRANSACTION TESTS - Should Block",
+      "description": "Transactions that should be blocked",
+      "item": [
+        {
+          "name": "4.1 ❌ Zero Amount",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 0,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Test\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "Zero amount should be rejected"
+          }
+        },
+        {
+          "name": "4.2 ❌ Negative Amount",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": -5000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Test\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "Negative amount should be rejected"
+          }
+        },
+        {
+          "name": "4.3 ❌ No Auth Token",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 5000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Test\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "No authentication - should return 401"
+          }
+        }
+      ]
+    },
+    {
+      "name": "👑 5. ADMIN TRANSACTIONS (Superuser Bypass)",
+      "description": "Admin can bypass all fraud checks",
+      "item": [
+        {
+          "name": "5.1 ✅ Admin High Amount (Bypassed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{admin_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 500000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"VIP Client\",\n  \"transaction_type\": \"transfer\",\n  \"description\": \"Admin bypass - no risk check\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "Superuser bypasses ALL fraud checks - always approved"
+          }
+        },
+        {
+          "name": "5.2 ✅ Admin Crypto (Bypassed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{admin_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 100000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Crypto Exchange\",\n  \"transaction_type\": \"crypto\",\n  \"description\": \"Admin crypto - bypassed\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        },
+        {
+          "name": "5.3 ✅ Admin International (Bypassed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{admin_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 250000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"International Partner\",\n  \"transaction_type\": \"international\",\n  \"description\": \"Admin international - bypassed\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "📋 6. TRANSACTION LIST & DETAILS",
+      "item": [
+        {
+          "name": "6.1 📋 List All Transactions (Adil)",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{adil_token}}"}],
+            "url": "{{base_url}}/api/transactions/",
+            "description": "Get all transactions for Adil"
+          }
+        },
+        {
+          "name": "6.2 📋 List All Transactions (Ashik)",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{ashik_token}}"}],
+            "url": "{{base_url}}/api/transactions/"
+          }
+        },
+        {
+          "name": "6.3 📋 List All Transactions (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{admin_token}}"}],
+            "url": "{{base_url}}/api/transactions/"
+          }
+        },
+        {
+          "name": "6.4 🔍 Transaction Detail (ID: 1)",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{adil_token}}"}],
+            "url": "{{base_url}}/api/transactions/1/",
+            "description": "Get details of transaction ID 1"
+          }
+        },
+        {
+          "name": "6.5 📊 Transaction Statistics",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{adil_token}}"}],
+            "url": "{{base_url}}/api/transactions/stats/",
+            "description": "Get transaction statistics for user"
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔄 7. VELOCITY TESTS (Run Multiple Times)",
+      "description": "Run these multiple times to trigger velocity limits",
+      "item": [
+        {
+          "name": "7.1 Velocity Test 1",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{ashik_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 1000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Velocity Test\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "Run this 10+ times in 1 hour to trigger velocity limit"
+          }
+        },
+        {
+          "name": "7.2 Velocity Test 2",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{ashik_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 1500,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Velocity Test 2\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        },
+        {
+          "name": "7.3 Velocity Test 3",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{ashik_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 2000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Velocity Test 3\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "💵 8. DAILY LIMIT TESTS",
+      "description": "Test daily transaction limits (500K SAR/day)",
+      "item": [
+        {
+          "name": "8.1 Large Transaction 1 (200K)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 200000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Daily Limit Test 1\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "First large transaction"
+          }
+        },
+        {
+          "name": "8.2 Large Transaction 2 (200K)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 200000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Daily Limit Test 2\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/"
+          }
+        },
+        {
+          "name": "8.3 Large Transaction 3 (Should Exceed 500K)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"},
+              {"key": "Authorization", "value": "Bearer {{adil_token}}"}
+            ],
+            "body": {"mode": "raw", "raw": "{\n  \"amount\": 150000,\n  \"currency\": \"SAR\",\n  \"beneficiary\": \"Daily Limit Test 3\",\n  \"transaction_type\": \"transfer\"\n}"},
+            "url": "{{base_url}}/api/transactions/create/",
+            "description": "This should trigger daily_limit_exceeded if previous 2 succeeded"
           }
         }
       ]

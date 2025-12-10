@@ -5,7 +5,7 @@
 All utility functions are exported from here for easy import.
 
 Usage:
-    from frauddetect.utils import is_superuser_device, superuser_bypass
+    from frauddetect.utils import is_superuser_device, RiskProfileManager
 """
 
 from .superuser_protection import (
@@ -19,7 +19,10 @@ from .superuser_protection import (
     superuser_bypass,
 )
 
+from .risk_profile_manager import RiskProfileManager
+
 __all__ = [
+    # Superuser protection
     'is_superuser_username',
     'is_superuser_ip',
     'is_superuser_device',
@@ -28,4 +31,6 @@ __all__ = [
     'can_block_device',
     'get_superuser_protection_status',
     'superuser_bypass',
+    # Risk Profile
+    'RiskProfileManager',
 ]

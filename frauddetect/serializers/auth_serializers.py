@@ -609,6 +609,15 @@ class LoginSerializer(serializers.Serializer):
                 metadata={'username': final_username, 'country_code': country_code}
             )
             
+            # UPDATE RISK PROFILE for existing user (if username exists)
+            try:
+                existing_user = User.objects.get(username=final_username)
+                from frauddetect.utils import RiskProfileManager
+                risk_manager = RiskProfileManager(existing_user)
+                risk_manager.on_login_failed(ip_address, country_code)
+            except User.DoesNotExist:
+                pass
+            
             print(f"❌ FAILED LOGIN: {final_username} from {ip_address}")
             raise serializers.ValidationError({'error': 'Invalid credentials'})
         
@@ -661,6 +670,16 @@ class LoginSerializer(serializers.Serializer):
         if not result['allowed']:
             engine.create_login_event(status='blocked')
             engine.create_system_log(level='critical')
+            
+            # UPDATE RISK PROFILE - Blocked login
+            from frauddetect.utils import RiskProfileManager
+            risk_manager = RiskProfileManager(user)
+            risk_manager.on_login_blocked(
+                reason=result.get('error', {}).get('reason', 'unknown'),
+                ip_address=engine.ip_address,
+                country_code=engine.country_code
+            )
+            
             print(f"🚫 LOGIN BLOCKED: {result.get('error', {}).get('message')}")
             raise serializers.ValidationError(result['error'])
         
@@ -670,7 +689,17 @@ class LoginSerializer(serializers.Serializer):
             level='warning' if result['is_suspicious'] else 'info'
         )
         
-        print(f"✅ LOGIN SUCCESS: {user.username}")
+        # UPDATE RISK PROFILE
+        from frauddetect.utils import RiskProfileManager
+        risk_manager = RiskProfileManager(user)
+        risk_update = risk_manager.on_login_success(
+            ip_address=engine.ip_address,
+            country_code=engine.country_code,
+            city=engine.city,
+            device=device
+        )
+        
+        print(f"✅ LOGIN SUCCESS: {user.username} | Risk Profile Updated: {risk_update}")
         
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)

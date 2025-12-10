@@ -84,8 +84,15 @@ class TransactionCreateSerializer(serializers.Serializer):
         # RUN FRAUD DETECTION
         fraud_result = check_transaction_fraud(request, user, transaction_data)
         
-        # If blocked, raise validation error
+        # If blocked, raise validation error and update risk profile
         if not fraud_result['allowed']:
+            # UPDATE RISK PROFILE - Blocked transaction
+            from frauddetect.utils import RiskProfileManager
+            risk_manager = RiskProfileManager(user)
+            risk_manager.on_transaction_blocked(
+                amount=transaction_data['amount'],
+                block_reason=fraud_result.get('error', {}).get('reason', 'high_risk')
+            )
             raise serializers.ValidationError(fraud_result['error'])
         
         # CREATE TRANSACTION
@@ -133,6 +140,21 @@ class TransactionCreateSerializer(serializers.Serializer):
             status=status,
             approved_at=timezone.now() if status == 'approved' else None,
         )
+        
+        # UPDATE RISK PROFILE based on transaction status
+        from frauddetect.utils import RiskProfileManager
+        risk_manager = RiskProfileManager(user)
+        
+        if status == 'approved':
+            risk_manager.on_transaction_approved(
+                amount=transaction_data['amount'],
+                transaction_type=transaction_data['transaction_type']
+            )
+        elif status == 'flagged':
+            risk_manager.on_transaction_flagged(
+                amount=transaction_data['amount'],
+                risk_reasons=fraud_result['risk_reasons']
+            )
         
         # RETURN RESPONSE
         return {
