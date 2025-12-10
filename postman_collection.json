@@ -1,0 +1,68 @@
+{
+  "info": {
+    "name": "🛡️ Fraud Detection API - Complete Test Suite",
+    "description": "Complete API testing collection for Fraud Detection System with all login and transaction fraud detection scenarios.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "base_url", "value": "http://localhost:8000"},
+    {"key": "admin_token", "value": ""},
+    {"key": "adil_token", "value": ""},
+    {"key": "ashik_token", "value": ""}
+  ],
+  "item": [
+    {
+      "name": "🔐 1. Authentication Tests",
+      "item": [
+        {
+          "name": "1.1 ✅ Admin Login (Superuser - Bypass All)",
+          "event": [{"listen": "test", "script": {"exec": ["var jsonData = pm.response.json();", "if(jsonData.access) { pm.collectionVariables.set('admin_token', jsonData.access); }", "pm.test('Admin login successful', function() { pm.response.to.have.status(200); });"]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"username\": \"olee\", \"password\": \"501302aA\"}"},
+            "url": "{{base_url}}/api/auth/login/"
+          }
+        },
+        {
+          "name": "1.2 ✅ Adil Login (Normal User)",
+          "event": [{"listen": "test", "script": {"exec": ["var jsonData = pm.response.json();", "if(jsonData.access) { pm.collectionVariables.set('adil_token', jsonData.access); }", "pm.test('Adil login successful', function() { pm.response.to.have.status(200); });"]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"username\": \"adil\", \"password\": \"501302aA\"}"},
+            "url": "{{base_url}}/api/auth/login/"
+          }
+        },
+        {
+          "name": "1.3 ✅ Ashik Login (Normal User)",
+          "event": [{"listen": "test", "script": {"exec": ["var jsonData = pm.response.json();", "if(jsonData.access) { pm.collectionVariables.set('ashik_token', jsonData.access); }", "pm.test('Ashik login successful', function() { pm.response.to.have.status(200); });"]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"username\": \"ashik\", \"password\": \"501302aA\"}"},
+            "url": "{{base_url}}/api/auth/login/"
+          }
+        },
+        {
+          "name": "1.4 ✅ Login with Email",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"email\": \"adil@example.com\", \"password\": \"501302aA\"}"},
+            "url": "{{base_url}}/api/auth/login/"
+          }
+        },
+        {
+          "name": "1.5 ✅ Login with username_or_email",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"username_or_email\": \"ashik\", \"password\": \"501302aA\"}"},
+            "url": "{{base_url}}/api/auth/login/"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -3,10 +3,9 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Simple middleware for transaction fraud detection.
-All fraud checking logic is here.
 
 Usage:
-    from frauddetect.transaction_middleware import check_transaction_fraud
+    from frauddetect.middleware import check_transaction_fraud
     
     result = check_transaction_fraud(request, user, transaction_data)
     if not result['allowed']:
@@ -31,24 +30,60 @@ def get_client_ip(request):
 
 def get_geo_location(ip_address):
     """
-    Get geolocation from IP address
-    
-    TODO: Integrate with real geolocation API (e.g., MaxMind, IP2Location)
-    For now, returns mock data
+    Get geolocation from IP address using free API
+    Uses ipapi.co (free tier: 1000 requests/day)
     """
-    # Mock data - replace with real API call
-    if ip_address in ['127.0.0.1', 'localhost']:
+    import requests
+    
+    # Local/Private IPs - return LOCAL
+    if ip_address.startswith(('127.', '10.', '172.', '192.168.', 'localhost')) or ip_address == '::1':
         return {
-            'country_code': 'SA',
-            'country_name': 'Saudi Arabia',
-            'city': 'Riyadh',
-            'region': 'Riyadh Region',
+            'country_code': 'LOCAL',
+            'country_name': 'Local Network',
+            'city': 'Local',
+            'region': 'Local',
         }
     
-    # Default to Saudi Arabia for testing
+    # Try ipapi.co (free API)
+    try:
+        response = requests.get(
+            f'https://ipapi.co/{ip_address}/json/',
+            timeout=3,
+            headers={'User-Agent': 'FraudDetection/1.0'}
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if 'error' not in data:
+                return {
+                    'country_code': data.get('country_code', 'Unknown'),
+                    'country_name': data.get('country_name', 'Unknown'),
+                    'city': data.get('city', 'Unknown'),
+                    'region': data.get('region', 'Unknown'),
+                }
+    except Exception as e:
+        print(f"⚠️ Geo API error: {e}")
+    
+    # Fallback - try ip-api.com (free, no key needed)
+    try:
+        response = requests.get(
+            f'http://ip-api.com/json/{ip_address}',
+            timeout=3
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                return {
+                    'country_code': data.get('countryCode', 'Unknown'),
+                    'country_name': data.get('country', 'Unknown'),
+                    'city': data.get('city', 'Unknown'),
+                    'region': data.get('regionName', 'Unknown'),
+                }
+    except Exception as e:
+        print(f"⚠️ Fallback Geo API error: {e}")
+    
     return {
-        'country_code': 'SA',
-        'country_name': 'Saudi Arabia',
+        'country_code': 'Unknown',
+        'country_name': 'Unknown',
         'city': 'Unknown',
         'region': 'Unknown',
     }
@@ -56,7 +91,7 @@ def get_geo_location(ip_address):
 
 def get_user_device(request, user):
     """Get or create user device"""
-    from .models import Device
+    from frauddetect.models import Device
     
     user_agent = request.META.get('HTTP_USER_AGENT', '')
     ip_address = get_client_ip(request)
@@ -82,26 +117,11 @@ def check_transaction_fraud(request, user, transaction_data):
         request: Django request object
         user: User object
         transaction_data: Dict with transaction details
-            {
-                'amount': Decimal,
-                'currency': str,
-                'beneficiary': str,
-                'transaction_type': str,
-                'description': str,
-            }
     
     Returns:
-        dict: {
-            'allowed': bool,
-            'risk_score': int,
-            'risk_level': str,
-            'risk_reasons': list,
-            'triggered_patterns': list,
-            'requires_manual_review': bool,
-            'error': dict (if blocked)
-        }
+        dict: Fraud check result
     """
-    from .models import FraudConfig, Transaction, IPBlocklist, Device
+    from frauddetect.models import FraudConfig, Transaction, IPBlocklist, Device
     
     # Get configuration
     try:
@@ -130,9 +150,7 @@ def check_transaction_fraud(request, user, transaction_data):
     risk_reasons = []
     triggered_patterns = []
     
-    # ═══════════════════════════════════════════════════════════════════════
     # SUPERUSER BYPASS
-    # ═══════════════════════════════════════════════════════════════════════
     if user.is_superuser:
         return {
             'allowed': True,
@@ -151,9 +169,7 @@ def check_transaction_fraud(request, user, transaction_data):
             }
         }
     
-    # ═══════════════════════════════════════════════════════════════════════
-    # CHECK 1: IP BLACKLIST (CRITICAL)
-    # ═══════════════════════════════════════════════════════════════════════
+    # CHECK 1: IP BLACKLIST
     if IPBlocklist.objects.filter(ip_address=ip_address, is_active=True).exists():
         return {
             'allowed': False,
@@ -168,9 +184,7 @@ def check_transaction_fraud(request, user, transaction_data):
             'triggered_patterns': ['blacklisted_ip'],
         }
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 2: COUNTRY RESTRICTION
-    # ═══════════════════════════════════════════════════════════════════════
     if config and config.geo_restriction_enabled:
         allowed_countries = config.allowed_countries or ['SA']
         
@@ -193,9 +207,7 @@ def check_transaction_fraud(request, user, transaction_data):
                 'triggered_patterns': triggered_patterns,
             }
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 3: DEVICE TRUST
-    # ═══════════════════════════════════════════════════════════════════════
     if device and not device.is_trusted:
         total_risk += 50
         risk_reasons.append('Transaction from untrusted device')
@@ -214,9 +226,7 @@ def check_transaction_fraud(request, user, transaction_data):
             'triggered_patterns': triggered_patterns,
         }
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 4: AMOUNT THRESHOLD
-    # ═══════════════════════════════════════════════════════════════════════
     if config:
         threshold = config.high_amount_threshold or 100000
         
@@ -225,13 +235,10 @@ def check_transaction_fraud(request, user, transaction_data):
             risk_reasons.append(f'Amount {amount} exceeds threshold {threshold}')
             triggered_patterns.append('amount_exceeds_threshold')
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 5: VELOCITY (HIGH FREQUENCY)
-    # ═══════════════════════════════════════════════════════════════════════
     if config:
         max_per_hour = config.max_transactions_per_hour or 10
         
-        # Count transactions in last hour
         one_hour_ago = timezone.now() - timedelta(hours=1)
         recent_count = Transaction.objects.filter(
             user=user,
@@ -258,14 +265,11 @@ def check_transaction_fraud(request, user, transaction_data):
                 'triggered_patterns': triggered_patterns,
             }
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 6: DAILY LIMITS
-    # ═══════════════════════════════════════════════════════════════════════
     if config:
         max_daily_count = config.max_daily_transactions or 50
         max_daily_amount = config.max_transaction_amount_daily or 500000
         
-        # Get today's transactions
         today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
         today_txns = Transaction.objects.filter(
             user=user,
@@ -275,15 +279,13 @@ def check_transaction_fraud(request, user, transaction_data):
         
         today_count = today_txns.count()
         today_amount = today_txns.aggregate(Sum('amount'))['amount__sum'] or 0
-        today_amount += amount  # Include current transaction
+        today_amount += amount
         
-        # Check count
         if today_count >= max_daily_count:
             total_risk += 40
             risk_reasons.append(f'Daily limit exceeded: {today_count}/{max_daily_count} transactions')
             triggered_patterns.append('daily_limit_count')
         
-        # Check amount
         if today_amount > max_daily_amount:
             total_risk += 40
             risk_reasons.append(f'Daily amount limit exceeded: {today_amount}/{max_daily_amount}')
@@ -303,28 +305,22 @@ def check_transaction_fraud(request, user, transaction_data):
                 'triggered_patterns': triggered_patterns,
             }
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 7: BUSINESS HOURS
-    # ═══════════════════════════════════════════════════════════════════════
     if config and config.flag_outside_business_hours:
         current_hour = timezone.now().hour
         business_start = config.business_hours_start or 8
         business_end = config.business_hours_end or 18
         
         if current_hour < 6 or current_hour > 22:
-            # High-risk hours (midnight to 6 AM)
             total_risk += 20
             risk_reasons.append(f'Transaction at high-risk hour: {current_hour}:00')
             triggered_patterns.append('high_risk_hours')
         elif current_hour < business_start or current_hour >= business_end:
-            # Outside business hours
             total_risk += 10
             risk_reasons.append(f'Transaction outside business hours: {current_hour}:00')
             triggered_patterns.append('outside_business_hours')
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 8: USER AVERAGE COMPARISON
-    # ═══════════════════════════════════════════════════════════════════════
     historical = Transaction.objects.filter(
         user=user,
         status='approved',
@@ -343,9 +339,7 @@ def check_transaction_fraud(request, user, transaction_data):
             risk_reasons.append(f'Amount {deviation_pct:.0f}% above user average')
             triggered_patterns.append('amount_exceeds_user_average')
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 9: DORMANT ACCOUNT
-    # ═══════════════════════════════════════════════════════════════════════
     last_txn = Transaction.objects.filter(
         user=user,
         status='approved'
@@ -359,9 +353,7 @@ def check_transaction_fraud(request, user, transaction_data):
             risk_reasons.append(f'Dormant account active after {days_since_last} days')
             triggered_patterns.append('dormant_account')
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 10: NEW ACCOUNT
-    # ═══════════════════════════════════════════════════════════════════════
     account_age_days = (timezone.now() - user.date_joined).days
     
     if account_age_days < 30 and amount > 50000:
@@ -369,9 +361,7 @@ def check_transaction_fraud(request, user, transaction_data):
         risk_reasons.append(f'New account ({account_age_days} days) with high-value transaction')
         triggered_patterns.append('new_account_high_value')
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 11: TRANSACTION TYPE RISK
-    # ═══════════════════════════════════════════════════════════════════════
     if transaction_type == 'international':
         total_risk += 35
         risk_reasons.append('International transfer')
@@ -385,9 +375,7 @@ def check_transaction_fraud(request, user, transaction_data):
         risk_reasons.append('High-value P2P transfer')
         triggered_patterns.append('p2p_high_value')
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CHECK 12: NEW DEVICE HIGH AMOUNT
-    # ═══════════════════════════════════════════════════════════════════════
     if device:
         device_age_hours = (timezone.now() - device.first_seen_at).total_seconds() / 3600
         
@@ -396,10 +384,8 @@ def check_transaction_fraud(request, user, transaction_data):
             risk_reasons.append(f'High amount from new device (age: {device_age_hours:.1f} hours)')
             triggered_patterns.append('new_device_high_amount')
     
-    # ═══════════════════════════════════════════════════════════════════════
     # CALCULATE RISK LEVEL
-    # ═══════════════════════════════════════════════════════════════════════
-    total_risk = min(total_risk, 100)  # Cap at 100
+    total_risk = min(total_risk, 100)
     
     if total_risk >= 80:
         risk_level = 'critical'
@@ -434,9 +420,7 @@ def check_transaction_fraud(request, user, transaction_data):
             'triggered_patterns': triggered_patterns,
         }
     
-    # ═══════════════════════════════════════════════════════════════════════
     # RETURN RESULT
-    # ═══════════════════════════════════════════════════════════════════════
     return {
         'allowed': True,
         'risk_score': total_risk,

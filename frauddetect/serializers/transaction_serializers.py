@@ -7,52 +7,14 @@ Simple transaction serializer with built-in fraud detection.
 
 from rest_framework import serializers
 from django.utils import timezone
-from .models import Transaction
-from .transaction_middleware import check_transaction_fraud, get_client_ip, get_geo_location, get_user_device
+from frauddetect.models import Transaction
+from frauddetect.middleware import check_transaction_fraud, get_client_ip, get_geo_location, get_user_device
 import uuid
 
 
 class TransactionCreateSerializer(serializers.Serializer):
     """
     💰 Create Transaction with Fraud Detection
-    
-    Request:
-    {
-        "amount": 50000,
-        "currency": "SAR",
-        "beneficiary": "John Doe",
-        "transaction_type": "transfer",
-        "description": "Payment for services"
-    }
-    
-    Response (Success):
-    {
-        "success": true,
-        "transaction": {
-            "id": 1,
-            "external_txn_id": "TXN-123456",
-            "amount": "50000.00",
-            "currency": "SAR",
-            "status": "approved",
-            "risk_score": 20,
-            "risk_level": "low"
-        },
-        "fraud_check": {
-            "risk_score": 20,
-            "risk_level": "low",
-            "risk_reasons": [],
-            "requires_manual_review": false
-        }
-    }
-    
-    Response (Blocked):
-    {
-        "success": false,
-        "error": "Transaction Blocked",
-        "reason": "high_velocity",
-        "message": "Too many transactions...",
-        "risk_score": 100
-    }
     """
     
     # Input fields
@@ -106,9 +68,7 @@ class TransactionCreateSerializer(serializers.Serializer):
         return value
     
     def create(self, validated_data):
-        """
-        Create transaction with fraud detection
-        """
+        """Create transaction with fraud detection"""
         request = self.context.get('request')
         user = request.user
         
@@ -121,20 +81,14 @@ class TransactionCreateSerializer(serializers.Serializer):
             'description': validated_data.get('description', ''),
         }
         
-        # ═══════════════════════════════════════════════════════════════════
         # RUN FRAUD DETECTION
-        # ═══════════════════════════════════════════════════════════════════
         fraud_result = check_transaction_fraud(request, user, transaction_data)
         
         # If blocked, raise validation error
         if not fraud_result['allowed']:
             raise serializers.ValidationError(fraud_result['error'])
         
-        # ═══════════════════════════════════════════════════════════════════
         # CREATE TRANSACTION
-        # ═══════════════════════════════════════════════════════════════════
-        
-        # Get location and device info
         ip_address = get_client_ip(request)
         geo_data = get_geo_location(ip_address)
         device = get_user_device(request, user)
@@ -180,9 +134,7 @@ class TransactionCreateSerializer(serializers.Serializer):
             approved_at=timezone.now() if status == 'approved' else None,
         )
         
-        # ═══════════════════════════════════════════════════════════════════
         # RETURN RESPONSE
-        # ═══════════════════════════════════════════════════════════════════
         return {
             'success': True,
             'transaction': {
@@ -210,9 +162,7 @@ class TransactionCreateSerializer(serializers.Serializer):
 
 
 class TransactionListSerializer(serializers.ModelSerializer):
-    """
-    Transaction list serializer
-    """
+    """Transaction list serializer"""
     user_username = serializers.CharField(source='user.username', read_only=True)
     device_name = serializers.CharField(source='device.device_name', read_only=True)
     
@@ -238,9 +188,7 @@ class TransactionListSerializer(serializers.ModelSerializer):
 
 
 class TransactionDetailSerializer(serializers.ModelSerializer):
-    """
-    Transaction detail serializer
-    """
+    """Transaction detail serializer"""
     user_username = serializers.CharField(source='user.username', read_only=True)
     device_name = serializers.CharField(source='device.device_name', read_only=True)
     reviewed_by_username = serializers.CharField(source='reviewed_by.username', read_only=True)

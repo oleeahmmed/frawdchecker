@@ -3,7 +3,7 @@ from django.utils.html import format_html
 from django.db.models import Count, Sum, Avg
 from unfold.admin import ModelAdmin
 from unfold.decorators import display
-from .models import (
+from frauddetect.models import (
     Device, 
     LoginEvent, 
     Transaction, 
@@ -110,7 +110,7 @@ class DeviceAdmin(ModelAdmin):
     @admin.action(description='🚫 Block selected devices')
     def block_devices(self, request, queryset):
         """Block selected devices"""
-        from .superuser_protection import can_block_device
+        from frauddetect.utils import can_block_device
         
         blocked_count = 0
         protected_count = 0
@@ -474,7 +474,7 @@ class IPBlocklistAdmin(ModelAdmin):
     @admin.action(description='🚫 Activate selected IP blocks')
     def activate_blocks(self, request, queryset):
         """Activate IP blocks"""
-        from .superuser_protection import can_block_ip
+        from frauddetect.utils import can_block_ip
         
         blocked_count = 0
         protected_count = 0

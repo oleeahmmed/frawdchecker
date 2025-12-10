@@ -6,12 +6,14 @@ Authentication এবং Transaction endpoints।
 """
 
 from django.urls import path
-from .views import LoginView, CustomTokenRefreshView, CurrentUserView
-from .transaction_views import (
+from frauddetect.views import (
+    LoginView,
+    CustomTokenRefreshView,
+    CurrentUserView,
     TransactionCreateView,
     TransactionListView,
     TransactionDetailView,
-    TransactionStatsView
+    TransactionStatsView,
 )
 
 app_name = 'frauddetect'

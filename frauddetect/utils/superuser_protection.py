@@ -47,7 +47,7 @@ def is_superuser_ip(ip_address):
         bool: True if IP belongs to superuser, False otherwise
     """
     try:
-        from .models import Device
+        from frauddetect.models import Device
         
         # Check if any superuser has used this IP
         superuser_devices = Device.objects.filter(

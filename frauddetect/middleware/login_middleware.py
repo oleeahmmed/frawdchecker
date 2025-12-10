@@ -7,7 +7,7 @@
 Settings.py তে add করো:
     MIDDLEWARE = [
         ...
-        'frauddetect.login_middleware.LoginSecurityMiddleware',
+        'frauddetect.middleware.LoginSecurityMiddleware',
     ]
 """
 
@@ -19,7 +19,7 @@ from django.conf import settings
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS (সব এখানে)
+# HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def get_client_ip(request):
@@ -37,27 +37,53 @@ def get_client_ip(request):
 
 
 def get_geo_location(ip_address):
-    """IP থেকে location বের করে"""
-    # Local IP
-    if ip_address.startswith(('127.', '10.', '172.', '192.168.', 'localhost')):
+    """
+    IP থেকে location বের করে using free APIs
+    Uses ipapi.co (free tier: 1000 requests/day)
+    Fallback: ip-api.com (free, unlimited for non-commercial)
+    """
+    # Local/Private IPs - return LOCAL
+    if ip_address.startswith(('127.', '10.', '172.', '192.168.', 'localhost')) or ip_address == '::1':
         return {
             'country_code': 'LOCAL',
             'country_name': 'Local Network',
             'city': 'Local',
         }
     
-    # Try API
+    # Try ipapi.co (free API)
     try:
-        response = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=3)
+        response = requests.get(
+            f'https://ipapi.co/{ip_address}/json/',
+            timeout=3,
+            headers={'User-Agent': 'FraudDetection/1.0'}
+        )
         if response.status_code == 200:
             data = response.json()
-            return {
-                'country_code': data.get('country_code', 'Unknown'),
-                'country_name': data.get('country_name', 'Unknown'),
-                'city': data.get('city', 'Unknown'),
-            }
-    except:
-        pass
+            if 'error' not in data:
+                return {
+                    'country_code': data.get('country_code', 'Unknown'),
+                    'country_name': data.get('country_name', 'Unknown'),
+                    'city': data.get('city', 'Unknown'),
+                }
+    except Exception as e:
+        print(f"⚠️ Geo API error: {e}")
+    
+    # Fallback - try ip-api.com (free, no key needed)
+    try:
+        response = requests.get(
+            f'http://ip-api.com/json/{ip_address}',
+            timeout=3
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                return {
+                    'country_code': data.get('countryCode', 'Unknown'),
+                    'country_name': data.get('country', 'Unknown'),
+                    'city': data.get('city', 'Unknown'),
+                }
+    except Exception as e:
+        print(f"⚠️ Fallback Geo API error: {e}")
     
     return {
         'country_code': 'Unknown',
@@ -68,7 +94,7 @@ def get_geo_location(ip_address):
 
 def is_ip_blocked(ip_address):
     """IP blocked কিনা check করে"""
-    from .models import IPBlocklist
+    from frauddetect.models import IPBlocklist
     
     entry = IPBlocklist.objects.filter(
         ip_address=ip_address,
@@ -79,11 +105,8 @@ def is_ip_blocked(ip_address):
 
 
 def is_superuser_request(request):
-    """
-    Check if request is from a superuser
-    Superusers should NEVER be blocked
-    """
-    from .superuser_protection import is_superuser_username
+    """Check if request is from a superuser"""
+    from frauddetect.utils import is_superuser_username
     
     # Check if user is authenticated and is superuser
     if hasattr(request, 'user') and request.user.is_authenticated:
@@ -114,15 +137,10 @@ def is_superuser_request(request):
 
 
 def is_ip_whitelisted(ip_address):
-    """
-    IP whitelisted কিনা check করে
-    দুই জায়গায় check করে:
-    1. IPWhitelist model (detailed management)
-    2. FraudConfig.quick_whitelist_ips (quick access)
-    """
+    """IP whitelisted কিনা check করে"""
     # Check IPWhitelist model
     try:
-        from .models import IPWhitelist
+        from frauddetect.models import IPWhitelist
         if IPWhitelist.is_whitelisted(ip_address):
             return True
     except:
@@ -130,7 +148,7 @@ def is_ip_whitelisted(ip_address):
     
     # Check FraudConfig quick whitelist
     try:
-        from .models import FraudConfig
+        from frauddetect.models import FraudConfig
         config = FraudConfig.objects.filter(is_active=True).first()
         if config and config.quick_whitelist_ips:
             if ip_address in config.quick_whitelist_ips:
@@ -144,7 +162,7 @@ def is_ip_whitelisted(ip_address):
 def get_allowed_countries():
     """Allowed countries list return করে"""
     try:
-        from .models import FraudConfig
+        from frauddetect.models import FraudConfig
         config = FraudConfig.objects.filter(is_active=True).first()
         if config:
             return config.allowed_countries or ['SA']
@@ -156,7 +174,7 @@ def get_allowed_countries():
 
 def create_login_event(username, status, ip_address, country_code, city, risk_score, risk_reasons, user_agent):
     """Login event তৈরি করে"""
-    from .models import LoginEvent
+    from frauddetect.models import LoginEvent
     
     return LoginEvent.objects.create(
         user=None,
@@ -175,7 +193,7 @@ def create_login_event(username, status, ip_address, country_code, city, risk_sc
 
 def create_system_log(log_type, level, message, ip_address, metadata):
     """System log তৈরি করে"""
-    from .models import SystemLog
+    from frauddetect.models import SystemLog
     
     return SystemLog.objects.create(
         log_type=log_type,
@@ -189,7 +207,7 @@ def create_system_log(log_type, level, message, ip_address, metadata):
 
 def auto_block_ip(ip_address, reason):
     """IP automatically block করে"""
-    from .models import IPBlocklist
+    from frauddetect.models import IPBlocklist
     from django.contrib.auth.models import User
     
     # Already blocked check
@@ -222,12 +240,6 @@ class LoginSecurityMiddleware:
     ✅ Auto IP Blocking
     ✅ Login Event Logging
     ✅ System Logging
-    ✅ NO DEPENDENCIES - সব কিছু এখানে
-    
-    Applies to:
-    - /api/auth/login/
-    - /api/token/
-    - /admin/login/
     """
     
     # Login endpoints
@@ -242,12 +254,8 @@ class LoginSecurityMiddleware:
         self.get_response = get_response
     
     def __call__(self, request):
-        """
-        Main middleware logic
-        """
-        # ─────────────────────────────────────────────────────────────────────
+        """Main middleware logic"""
         # Only check login endpoints (POST only)
-        # ─────────────────────────────────────────────────────────────────────
         if request.method == 'POST' and request.path in self.LOGIN_ENDPOINTS:
             
             # Get IP and location
@@ -261,11 +269,9 @@ class LoginSecurityMiddleware:
             # Get username from request
             username = 'Unknown'
             
-            # Try to get from POST data
             if request.POST:
                 username = request.POST.get('username') or request.POST.get('email') or 'Unknown'
             
-            # Try to get from JSON body
             if username == 'Unknown':
                 try:
                     import json
@@ -277,62 +283,42 @@ class LoginSecurityMiddleware:
             
             print(f"🔍 LOGIN CHECK: {username} from {ip_address} ({country_code})")
             
-            # ═════════════════════════════════════════════════════════════════
-            # CHECK 0: SUPERUSER PROTECTION (Never block superusers)
-            # ═════════════════════════════════════════════════════════════════
+            # CHECK 0: SUPERUSER PROTECTION
             if is_superuser_request(request):
-                print(f"👑 SUPERUSER: {username} - Bypassing all checks (Admin Protection)")
+                print(f"👑 SUPERUSER: {username} - Bypassing all checks")
                 
-                # Log superuser access
                 create_system_log(
                     log_type='security',
                     level='info',
-                    message=f"Superuser {username} accessed login from {ip_address} ({country_code})",
+                    message=f"Superuser {username} accessed login from {ip_address}",
                     ip_address=ip_address,
-                    metadata={
-                        'username': username,
-                        'country_code': country_code,
-                        'superuser': True,
-                        'protection': 'admin_never_blocked'
-                    }
+                    metadata={'username': username, 'country_code': country_code, 'superuser': True}
                 )
                 
-                # Continue to login view (bypass all checks)
                 response = self.get_response(request)
                 return response
             
-            # ═════════════════════════════════════════════════════════════════
-            # CHECK 1: IP WHITELIST (Bypass all checks)
-            # ═════════════════════════════════════════════════════════════════
+            # CHECK 1: IP WHITELIST
             if is_ip_whitelisted(ip_address):
-                print(f"✅ WHITELISTED IP: {ip_address} - Bypassing all checks")
+                print(f"✅ WHITELISTED IP: {ip_address}")
                 
-                # Log whitelisted access
                 create_system_log(
                     log_type='security',
                     level='info',
                     message=f"Whitelisted IP {ip_address} accessed login as {username}",
                     ip_address=ip_address,
-                    metadata={
-                        'username': username,
-                        'country_code': country_code,
-                        'whitelisted': True
-                    }
+                    metadata={'username': username, 'country_code': country_code, 'whitelisted': True}
                 )
                 
-                # Continue to login view (bypass all checks)
                 response = self.get_response(request)
                 return response
             
-            # ═════════════════════════════════════════════════════════════════
-            # CHECK 1: IP BLOCKLIST
-            # ═════════════════════════════════════════════════════════════════
+            # CHECK 2: IP BLOCKLIST
             is_blocked_flag, blocked_entry = is_ip_blocked(ip_address)
             
             if is_blocked_flag:
                 print(f"🚫 BLOCKED: IP Blocklist - {ip_address}")
                 
-                # Create login event
                 create_login_event(
                     username=username,
                     status='blocked',
@@ -344,17 +330,12 @@ class LoginSecurityMiddleware:
                     user_agent=user_agent
                 )
                 
-                # Create system log
                 create_system_log(
                     log_type='security',
                     level='critical',
                     message=f"Blocked IP {ip_address} attempted login as {username}",
                     ip_address=ip_address,
-                    metadata={
-                        'username': username,
-                        'country_code': country_code,
-                        'reason': 'ip_blocked'
-                    }
+                    metadata={'username': username, 'country_code': country_code, 'reason': 'ip_blocked'}
                 )
                 
                 return JsonResponse({
@@ -369,21 +350,17 @@ class LoginSecurityMiddleware:
                     'contact': 'Please contact support if you believe this is an error.'
                 }, status=403)
             
-            # ═════════════════════════════════════════════════════════════════
-            # CHECK 2: COUNTRY RESTRICTION
-            # ═════════════════════════════════════════════════════════════════
+            # CHECK 3: COUNTRY RESTRICTION
             allowed_countries = get_allowed_countries()
             
             if country_code not in allowed_countries:
                 print(f"🚫 BLOCKED: Country - {country_code} ({country_name})")
                 
-                # Auto-block IP
                 auto_block_ip(
                     ip_address=ip_address,
                     reason=f"Auto-block: Login from non-allowed country {country_code} ({country_name})"
                 )
                 
-                # Create login event
                 create_login_event(
                     username=username,
                     status='blocked',
@@ -395,19 +372,12 @@ class LoginSecurityMiddleware:
                     user_agent=user_agent
                 )
                 
-                # Create system log
                 create_system_log(
                     log_type='security',
                     level='critical',
-                    message=f"Blocked login from {country_name} ({country_code}) - User: {username}, IP: {ip_address}",
+                    message=f"Blocked login from {country_name} ({country_code}) - User: {username}",
                     ip_address=ip_address,
-                    metadata={
-                        'username': username,
-                        'country_code': country_code,
-                        'country_name': country_name,
-                        'city': city,
-                        'reason': 'non_allowed_country'
-                    }
+                    metadata={'username': username, 'country_code': country_code, 'reason': 'non_allowed_country'}
                 )
                 
                 return JsonResponse({
@@ -429,8 +399,6 @@ class LoginSecurityMiddleware:
             # ✅ All checks passed
             print(f"✅ ALLOWED: {username} from {country_code}")
         
-        # ─────────────────────────────────────────────────────────────────────
         # Continue to next middleware/view
-        # ─────────────────────────────────────────────────────────────────────
         response = self.get_response(request)
         return response

@@ -14,7 +14,7 @@ from django.dispatch import receiver
 from django.contrib.auth.models import User
 from django.db.models import Count
 
-from .models import RiskProfile, Transaction, FraudConfig
+from frauddetect.models import RiskProfile, Transaction, FraudConfig
 
 
 # ============================================

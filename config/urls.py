@@ -12,7 +12,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     
     # Fraud Detection APIs (Custom JWT authentication with fraud detection)
-    path('api/', include('frauddetect.urls')),
+    path('api/', include('frauddetect.api.urls')),
     
     # DRF Browsable API Auth
     path('api-auth/', include('rest_framework.urls')),
