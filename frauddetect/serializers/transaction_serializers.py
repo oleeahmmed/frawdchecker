@@ -103,10 +103,11 @@ class TransactionCreateSerializer(serializers.Serializer):
         # Generate external transaction ID
         external_txn_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
         
-        # Determine status based on risk
-        if fraud_result['action'] == 'hold':
+        # Determine status based on risk (handle superuser bypass case)
+        action = fraud_result.get('action', 'allow')
+        if action == 'hold':
             status = 'pending'
-        elif fraud_result['action'] == 'flag':
+        elif action == 'flag':
             status = 'flagged'
         else:
             status = 'approved'
@@ -123,12 +124,12 @@ class TransactionCreateSerializer(serializers.Serializer):
             description=transaction_data['description'],
             
             # Fraud detection results
-            risk_score=fraud_result['risk_score'],
-            risk_level=fraud_result['risk_level'],
-            risk_reasons=fraud_result['risk_reasons'],
-            triggered_patterns=fraud_result['triggered_patterns'],
-            is_suspicious=fraud_result['risk_score'] >= 40,
-            requires_manual_review=fraud_result['requires_manual_review'],
+            risk_score=fraud_result.get('risk_score', 0),
+            risk_level=fraud_result.get('risk_level', 'safe'),
+            risk_reasons=fraud_result.get('risk_reasons', []),
+            triggered_patterns=fraud_result.get('triggered_patterns', []),
+            is_suspicious=fraud_result.get('risk_score', 0) >= 40,
+            requires_manual_review=fraud_result.get('requires_manual_review', False),
             
             # Location
             ip_address=ip_address,
@@ -153,7 +154,7 @@ class TransactionCreateSerializer(serializers.Serializer):
         elif status == 'flagged':
             risk_manager.on_transaction_flagged(
                 amount=transaction_data['amount'],
-                risk_reasons=fraud_result['risk_reasons']
+                risk_reasons=fraud_result.get('risk_reasons', [])
             )
         
         # RETURN RESPONSE
@@ -173,11 +174,11 @@ class TransactionCreateSerializer(serializers.Serializer):
                 'created_at': transaction.created_at.isoformat(),
             },
             'fraud_check': {
-                'risk_score': fraud_result['risk_score'],
-                'risk_level': fraud_result['risk_level'],
-                'risk_reasons': fraud_result['risk_reasons'],
-                'triggered_patterns': fraud_result['triggered_patterns'],
-                'requires_manual_review': fraud_result['requires_manual_review'],
+                'risk_score': fraud_result.get('risk_score', 0),
+                'risk_level': fraud_result.get('risk_level', 'safe'),
+                'risk_reasons': fraud_result.get('risk_reasons', []),
+                'triggered_patterns': fraud_result.get('triggered_patterns', []),
+                'requires_manual_review': fraud_result.get('requires_manual_review', False),
             },
             'location_info': fraud_result.get('location_info', {}),
         }
