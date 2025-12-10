@@ -150,39 +150,28 @@ def check_transaction_fraud(request, user, transaction_data):
     risk_reasons = []
     triggered_patterns = []
     
-    # SUPERUSER BYPASS
-    if user.is_superuser:
-        return {
-            'allowed': True,
-            'bypassed': True,
-            'bypass_reason': 'superuser',
-            'risk_score': 0,
-            'risk_level': 'safe',
-            'risk_reasons': [],
-            'triggered_patterns': [],
-            'requires_manual_review': False,
-            'location_info': {
-                'ip_address': ip_address,
-                'country': country_name,
-                'country_code': country_code,
-                'city': city,
-            }
-        }
+    # Track if superuser (will run all checks but never block)
+    is_superuser = user.is_superuser
     
     # CHECK 1: IP BLACKLIST
     if IPBlocklist.objects.filter(ip_address=ip_address, is_active=True).exists():
-        return {
-            'allowed': False,
-            'error': {
-                'error': 'Transaction Blocked',
-                'reason': 'blacklisted_ip',
-                'message': 'Your IP address has been blocked',
-                'ip_address': ip_address
-            },
-            'risk_score': 100,
-            'risk_reasons': ['Blacklisted IP'],
-            'triggered_patterns': ['blacklisted_ip'],
-        }
+        total_risk += 100
+        risk_reasons.append('Blacklisted IP')
+        triggered_patterns.append('blacklisted_ip')
+        
+        if not is_superuser:
+            return {
+                'allowed': False,
+                'error': {
+                    'error': 'Transaction Blocked',
+                    'reason': 'blacklisted_ip',
+                    'message': 'Your IP address has been blocked',
+                    'ip_address': ip_address
+                },
+                'risk_score': 100,
+                'risk_reasons': risk_reasons,
+                'triggered_patterns': triggered_patterns,
+            }
     
     # CHECK 2: COUNTRY RESTRICTION
     if config and config.geo_restriction_enabled:
@@ -193,19 +182,20 @@ def check_transaction_fraud(request, user, transaction_data):
             risk_reasons.append(f'Transaction from non-allowed country: {country_code}')
             triggered_patterns.append('non_allowed_country')
             
-            return {
-                'allowed': False,
-                'error': {
-                    'error': 'Transaction Blocked',
-                    'reason': 'non_allowed_country',
-                    'message': f'Transactions from {country_name} are not allowed',
-                    'your_country': country_name,
-                    'allowed_countries': allowed_countries
-                },
-                'risk_score': total_risk,
-                'risk_reasons': risk_reasons,
-                'triggered_patterns': triggered_patterns,
-            }
+            if not is_superuser:
+                return {
+                    'allowed': False,
+                    'error': {
+                        'error': 'Transaction Blocked',
+                        'reason': 'non_allowed_country',
+                        'message': f'Transactions from {country_name} are not allowed',
+                        'your_country': country_name,
+                        'allowed_countries': allowed_countries
+                    },
+                    'risk_score': total_risk,
+                    'risk_reasons': risk_reasons,
+                    'triggered_patterns': triggered_patterns,
+                }
     
     # CHECK 3: DEVICE TRUST
     if device and not device.is_trusted:
@@ -213,18 +203,19 @@ def check_transaction_fraud(request, user, transaction_data):
         risk_reasons.append('Transaction from untrusted device')
         triggered_patterns.append('untrusted_device')
         
-        return {
-            'allowed': False,
-            'error': {
-                'error': 'Transaction Blocked',
-                'reason': 'untrusted_device',
-                'message': 'This device is not trusted for transactions',
-                'device_name': device.device_name if device else 'Unknown'
-            },
-            'risk_score': total_risk,
-            'risk_reasons': risk_reasons,
-            'triggered_patterns': triggered_patterns,
-        }
+        if not is_superuser:
+            return {
+                'allowed': False,
+                'error': {
+                    'error': 'Transaction Blocked',
+                    'reason': 'untrusted_device',
+                    'message': 'This device is not trusted for transactions',
+                    'device_name': device.device_name if device else 'Unknown'
+                },
+                'risk_score': total_risk,
+                'risk_reasons': risk_reasons,
+                'triggered_patterns': triggered_patterns,
+            }
     
     # CHECK 4: AMOUNT THRESHOLD
     if config:
@@ -251,19 +242,17 @@ def check_transaction_fraud(request, user, transaction_data):
             risk_reasons.append(f'High velocity: {recent_count} transactions in 1 hour')
             triggered_patterns.append('high_velocity')
             
-            return {
-                'allowed': False,
-                'error': {
+            if not is_superuser:
+                return {
+                    'allowed': False,
                     'error': 'Transaction Blocked',
-                    'reason': 'high_velocity',
                     'message': f'Too many transactions. Maximum {max_per_hour} per hour allowed.',
                     'transaction_count': recent_count,
-                    'max_allowed': max_per_hour
-                },
-                'risk_score': total_risk,
-                'risk_reasons': risk_reasons,
-                'triggered_patterns': triggered_patterns,
-            }
+                    'max_allowed': max_per_hour,
+                    'risk_score': total_risk,
+                    'risk_reasons': risk_reasons,
+                    'triggered_patterns': triggered_patterns,
+                }
     
     # CHECK 6: DAILY LIMITS
     if config:
